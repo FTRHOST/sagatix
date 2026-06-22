@@ -1,0 +1,102 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net default catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Admins Concept Collection
+    match /admins/{adminId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // Global Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'fathironmy4@gmail.com' || 
+        request.auth.token.email == 'fathironmy@gmail.com' || 
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 1. EVENTS Match Block
+    match /events/{eventId} {
+      allow read: if true; // Public events catalog
+      
+      // Creators / Admins gate
+      allow create: if isAdmin() && isValidEvent(incoming());
+      
+      // Full admin update or customer decrement-only update for booking
+      allow update: if (
+        (isAdmin() && isValidEvent(incoming())) ||
+        (isSignedIn() && isValidEventDecrement(incoming()))
+      );
+      
+      allow delete: if isAdmin();
+    }
+
+    function isValidEvent(data) {
+      return data.id is string && data.title is string && data.title.size() <= 200
+        && data.category is string && data.location is string
+        && data.priceMin is number && data.priceMax is number;
+    }
+
+    function isValidEventDecrement(data) {
+      return data.id is string && data.title is string
+        && incoming().diff(existing()).affectedKeys().hasAny(['ticketsLeft', 'isSoldOut', 'tiers', 'simulatedRequestsCount', 'registrationOpenTime']);
+    }
+
+    // 2. TICKETS Match Block
+    match /tickets/{ticketId} {
+      // Owner or Admin read
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      
+      // Booking tickets
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidTicketCreate(incoming());
+      
+      // Check-in (Admin only can mutate specific check-in states)
+      allow update: if isAdmin() && isValidTicketUpdate(incoming()) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['isCheckedIn', 'checkInTime'])
+      );
+      
+      allow delete: if isAdmin();
+    }
+
+    function isValidTicketCreate(data) {
+      return data.id is string && data.eventId is string && data.eventTitle is string
+        && data.tierName is string && data.quantity is number && data.quantity > 0
+        && data.totalAmount is number && data.ticketCode is string
+        && data.userId == request.auth.uid;
+    }
+
+    function isValidTicketUpdate(data) {
+      return data.id is string && data.eventId is string && data.eventTitle is string
+        && data.tierName is string && data.quantity is number && data.quantity > 0
+        && data.totalAmount is number && data.ticketCode is string
+        && data.userId == existing().userId; // Immutable ownership tag
+    }
+  }
+}

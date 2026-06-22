@@ -1,0 +1,68 @@
+{
+  "entities": {
+    "Event": {
+      "title": "Event",
+      "description": "Event listed on Sagatix platform",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "dateMonth": { "type": "string" },
+        "dateDay": { "type": "string" },
+        "dateFullString": { "type": "string" },
+        "dateISO": { "type": "string" },
+        "location": { "type": "string" },
+        "priceMin": { "type": "number" },
+        "priceMax": { "type": "number" },
+        "imageUrl": { "type": "string" },
+        "description": { "type": "string" },
+        "organizer": { "type": "string" },
+        "tag": { "type": "string" },
+        "ticketsLeft": { "type": "number" },
+        "isSoldOut": { "type": "boolean" },
+        "seatingChartUrl": { "type": "string" },
+        "registrationOpenTime": { "type": "string" },
+        "simulatedRequestsCount": { "type": "number" }
+      },
+      "required": ["id", "title", "category", "location", "priceMin", "priceMax", "imageUrl"]
+    },
+    "PurchasedTicket": {
+      "title": "PurchasedTicket",
+      "description": "Ticket purchased by a user on Sagatix",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "eventId": { "type": "string" },
+        "eventTitle": { "type": "string" },
+        "eventLocation": { "type": "string" },
+        "dateMonth": { "type": "string" },
+        "dateDay": { "type": "string" },
+        "dateFullString": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "tierName": { "type": "string" },
+        "quantity": { "type": "number" },
+        "pricePerTicket": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "bookingDate": { "type": "string" },
+        "ticketCode": { "type": "string" },
+        "registrationType": { "type": "string" },
+        "isCheckedIn": { "type": "boolean" },
+        "checkInTime": { "type": "string" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" }
+      },
+      "required": ["id", "eventId", "eventTitle", "tierName", "quantity", "totalAmount", "ticketCode"]
+    }
+  },
+  "firestore": {
+    "events": {
+      "schema": "Event",
+      "description": "Collection of events published on Sagatix"
+    },
+    "tickets": {
+      "schema": "PurchasedTicket",
+      "description": "Collection of tickets purchased by users"
+    }
+  }
+}
