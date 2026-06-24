@@ -94,9 +94,26 @@ let purchasedTickets: any[] = [];
 
 // REST API ENDPOINTS
 
-// 1. GET ALL EVENTS
+// 1. GET ALL EVENTS (LIGHTWEIGHT SUMMARY)
 app.get("/api/events", (req, res) => {
-  res.json(events);
+  const summaryEvents = events.map(e => ({
+    id: e.id,
+    title: e.title,
+    category: e.category,
+    dateMonth: e.dateMonth,
+    dateDay: e.dateDay,
+    dateFullString: e.dateFullString,
+    dateISO: e.dateISO,
+    location: e.location,
+    priceMin: e.priceMin,
+    priceMax: e.priceMax,
+    imageUrl: e.imageUrl,
+    tag: e.tag,
+    ticketsLeft: e.ticketsLeft,
+    isSoldOut: e.isSoldOut,
+    organizer: e.organizer
+  }));
+  res.json(summaryEvents);
 });
 
 // 2. GET EVENT DETAILS

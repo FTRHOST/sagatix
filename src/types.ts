@@ -14,6 +14,7 @@ export interface CustomFieldDefinition {
   type: 'text' | 'number' | 'textarea' | 'email';
   required: boolean;
   placeholder?: string;
+  allowedTierIds?: string[];
 }
 
 export interface FormSection {
@@ -28,6 +29,8 @@ export interface RegistrationRoleConfig {
   isTeamType: boolean; // if true, locks quantity to 1 (Team/Tournament registration style)
   description?: string;
   maxQuantity?: number; // Configurable maximum ticket purchase quantity per transaction
+  formSections?: FormSection[];
+  allowedTierIds?: string[];
 }
 
 export interface ContentBlock {
@@ -68,10 +71,15 @@ export interface Event {
 
 export interface LandingPageConfig {
   ctaTitle: string;
-  ctaSubtitle: string;
+  ctaDescription: string;
   ctaButtonText: string;
-  tipsTitle: string;
-  tipsList: string[];
+  promoCode: string;
+  tips: string[];
+  ctaLink?: string;
+  isCtaEnabled?: boolean;
+  isTipsEnabled?: boolean;
+  platformFeePercent?: number;
+  isPlatformFeeEnabled?: boolean;
 }
 
 export interface PurchasedTicket {

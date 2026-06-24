@@ -42,7 +42,7 @@ export const EventCard: React.FC<EventCardProps> = ({
       }`}
     >
       {/* Event Banner */}
-      <div className="relative h-48 overflow-hidden bg-surface-dim">
+      <div className="relative h-48 overflow-hidden bg-slate-950/60 flex justify-center">
         <img
           src={event.imageUrl}
           alt={event.title}
@@ -141,7 +141,22 @@ export const EventCard: React.FC<EventCardProps> = ({
           <div className="flex items-center gap-2">
             <CreditCard className="w-3.5 h-3.5 text-primary shrink-0" />
             <span className="font-semibold text-on-surface">
-              {isSoldOut ? 'Pendaftaran Ditutup' : `Rp ${event.priceMin.toLocaleString('id-ID')} - Rp ${event.priceMax.toLocaleString('id-ID')}`}
+              {(() => {
+                const prices = event.tiers && event.tiers.length > 0 ? event.tiers.map(t => Number(t.price) || 0) : [];
+                const priceMin = event.priceMin !== undefined ? Number(event.priceMin) : (prices.length > 0 ? Math.min(...prices) : 0);
+                const priceMax = event.priceMax !== undefined ? Number(event.priceMax) : (prices.length > 0 ? Math.max(...prices) : 0);
+
+                if (isSoldOut) {
+                  return 'Pendaftaran Ditutup';
+                }
+                if (priceMin === 0 && priceMax === 0) {
+                  return 'Gratis';
+                }
+                if (priceMin === priceMax) {
+                  return `Rp ${priceMin.toLocaleString('id-ID')}`;
+                }
+                return `Rp ${priceMin.toLocaleString('id-ID')} - Rp ${priceMax.toLocaleString('id-ID')}`;
+              })()}
             </span>
           </div>
         </div>

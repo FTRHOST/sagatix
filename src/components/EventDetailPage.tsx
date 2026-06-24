@@ -1,8 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Event, TicketTier, PurchasedTicket, FormSection, RegistrationRoleConfig } from '../types';
 import { ArrowLeft, Calendar, MapPin, Shield, Check, Sparkles, User, Award, Info, Heart, Ticket, Users, Layers, ChevronRight, ChevronLeft, Download, Clock, Hourglass, Server } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { signInWithGoogle } from '../lib/firebase';
+import { signInWithGoogle, auth, db } from '../lib/firebase';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { doc, setDoc } from 'firebase/firestore';
+import { QRCode } from './QRCode';
+import QRCodeLib from 'qrcode';
 
 interface EventDetailPageProps {
   event: Event;
@@ -14,6 +18,39 @@ interface EventDetailPageProps {
   currentUser: { fullName: string; email: string; role?: 'admin' | 'biasa' } | null;
   onLoginUser: (user: { fullName: string; email: string; role?: 'admin' | 'biasa' }) => void;
   isSandboxFailureMode?: boolean;
+  isSandboxTrafficActive?: boolean;
+  isSandboxCountdownActive?: boolean;
+  tickets?: PurchasedTicket[];
+  isPlatformFeeEnabled?: boolean;
+  platformFeePercent?: number;
+}
+
+function getFieldLabelFromEvent(fieldId: string, event: Event): string {
+  if (event.registrationRoles) {
+    for (const role of event.registrationRoles) {
+      if (role.formSections) {
+        for (const section of role.formSections) {
+          if (section.fields) {
+            const field = section.fields.find(f => f.id === fieldId);
+            if (field) return field.label;
+          }
+        }
+      }
+    }
+  }
+  if (event.formSections) {
+    for (const section of event.formSections) {
+      if (section.fields) {
+        const field = section.fields.find(f => f.id === fieldId);
+        if (field) return field.label;
+      }
+    }
+  }
+  if (event.customFormFields) {
+    const field = event.customFormFields.find(f => f.id === fieldId);
+    if (field) return field.label;
+  }
+  return fieldId;
 }
 
 export const EventDetailPage: React.FC<EventDetailPageProps> = ({
@@ -25,7 +62,12 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
   triggerNotification: triggerNotificationProp,
   currentUser,
   onLoginUser: onLoginUserProp,
-  isSandboxFailureMode = false
+  isSandboxFailureMode = false,
+  isSandboxTrafficActive = false,
+  isSandboxCountdownActive = false,
+  tickets = [],
+  isPlatformFeeEnabled = true,
+  platformFeePercent = 5,
 }) => {
   // Safe deferred wrappers to completely prevent React 18 concurrent update / render-overlap warnings
   const triggerNotification = (msg: string) => {
@@ -65,16 +107,25 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
 
   const [selectedRole, setSelectedRole] = useState<RegistrationRoleConfig>(roles[0]);
 
-  // 2. Resolve custom ticket tiers configured by administrator
-  const tiers: TicketTier[] = event.tiers && event.tiers.length > 0 ? event.tiers : [];
+  // 2. Resolve custom ticket tiers configured by administrator, filtered by selected category/role if configured
+  const tiers: TicketTier[] = useMemo(() => {
+    const rawTiers = event.tiers && event.tiers.length > 0 ? event.tiers : [];
+    if (!selectedRole || !selectedRole.allowedTierIds || selectedRole.allowedTierIds.length === 0) {
+      return rawTiers;
+    }
+    return rawTiers.filter(t => selectedRole.allowedTierIds!.includes(t.id));
+  }, [event.tiers, selectedRole]);
+
   const [selectedTier, setSelectedTier] = useState<TicketTier | null>(null);
 
-  // 3. Resolve custom form sections
-  const sections: FormSection[] = event.formSections && event.formSections.length > 0
-    ? event.formSections
-    : event.customFormFields && event.customFormFields.length > 0
-      ? [{ id: 'sec-default', title: 'Data Registrasi Utama', fields: event.customFormFields }]
-      : [];
+  // 3. Resolve custom form sections (prioritize per-role sections if defined)
+  const sections: FormSection[] = selectedRole && selectedRole.formSections && selectedRole.formSections.length > 0
+    ? selectedRole.formSections
+    : event.formSections && event.formSections.length > 0
+      ? event.formSections
+      : event.customFormFields && event.customFormFields.length > 0
+        ? [{ id: 'sec-default', title: 'Data Registrasi Utama', fields: event.customFormFields }]
+        : [];
 
   // PROGRESSIVE STEPS STATE
   // Step 1: Choose Registrant Category (Role)
@@ -123,8 +174,37 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
   const [countdownText, setCountdownText] = useState<string>('');
   const [countdownSeconds, setCountdownSeconds] = useState<number>(0);
 
-  // Monitor event.registrationOpenTime and tick countdown
+  // Monitor sandbox traffic load changes (Requirement 7)
   useEffect(() => {
+    if (isSandboxTrafficActive) {
+      setRequestsCount(50);
+    } else {
+      setRequestsCount(5);
+    }
+  }, [isSandboxTrafficActive]);
+
+  // Monitor event.registrationOpenTime and tick countdown (Requirement 6 & 8)
+  useEffect(() => {
+    if (isSandboxCountdownActive) {
+      setIsRegistrationLocked(true);
+      
+      const checkSandboxLock = () => {
+        setCountdownSeconds(prev => {
+          const nextVal = prev > 1 ? prev - 1 : 120;
+          const m = Math.floor(nextVal / 60);
+          const s = nextVal % 60;
+          setCountdownText(`Uji Sandbox Countdown Active: dibuka dalam ${m > 0 ? `${m}m ` : ''}${s}s`);
+          return nextVal;
+        });
+      };
+      
+      setCountdownSeconds(120);
+      setCountdownText("Uji Sandbox Countdown Active: dibuka dalam 2m 0s");
+      
+      const interval = setInterval(checkSandboxLock, 1000);
+      return () => clearInterval(interval);
+    }
+
     if (!event.registrationOpenTime) {
       setIsRegistrationLocked(false);
       return;
@@ -164,7 +244,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
 
     const interval = setInterval(checkLockStatus, 1000);
     return () => clearInterval(interval);
-  }, [event.registrationOpenTime, isRegistrationLocked]);
+  }, [event.registrationOpenTime, isRegistrationLocked, isSandboxCountdownActive]);
 
   // Tick queue progress if user is actively waiting
   useEffect(() => {
@@ -217,7 +297,9 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
   // Price calculations
   const priceUnit = selectedTier ? selectedTier.price : 0;
   const subtotal = priceUnit * quantity;
-  const serviceFee = selectedTier ? Math.round(subtotal * 0.05) : 0; // standard 5% admin fee
+  const feeEnabled = isPlatformFeeEnabled !== false;
+  const feePercent = platformFeePercent !== undefined ? platformFeePercent : 5;
+  const serviceFee = selectedTier && feeEnabled ? Math.round(subtotal * (feePercent / 100)) : 0;
   const totalCost = subtotal + serviceFee;
 
   // PROGRESSIVE NAVIGATION CONTROLLER
@@ -287,7 +369,8 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
       let isSectionValid = true;
 
       currentSection.fields.forEach(field => {
-        if (field.required && !formResponses[field.id]?.trim()) {
+        const isFieldApplicable = !field.allowedTierIds || field.allowedTierIds.length === 0 || (selectedTier && field.allowedTierIds.includes(selectedTier.id));
+        if (isFieldApplicable && field.required && !formResponses[field.id]?.trim()) {
           errors[field.id] = `${field.label} wajib diisi!`;
           isSectionValid = false;
         }
@@ -363,9 +446,33 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
       .toUpperCase()}`;
 
     // Generate unique seat numbers automatically (Requirement 9)
-    const seatPrefix = selectedTier.name.slice(0, 3).toUpperCase().replace(/\s/g, '');
-    const startingNum = Math.floor(1 + Math.random() * 120);
-    const seatNumbersArray = Array.from({ length: quantity }, (_, idx) => `${seatPrefix}-${startingNum + idx}`);
+    const getSeatPrefix = (tName: string) => {
+      const clean = tName.toLowerCase();
+      if (clean.includes('vip')) return 'VIP';
+      if (clean.includes('reguler') || clean.includes('regular')) return 'REG';
+      return tName.slice(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    };
+    const seatPrefix = getSeatPrefix(selectedTier.name);
+    
+    // Find all currently booked/blocked seat numbers for this event and tier
+    const bookedSeatCodes = new Set<string>();
+    if (tickets) {
+      tickets.forEach((t) => {
+        if (t.eventId === event.id && t.tierName === selectedTier.name && t.seatNumbers) {
+          t.seatNumbers.forEach((s) => bookedSeatCodes.add(s));
+        }
+      });
+    }
+
+    const seatNumbersArray: string[] = [];
+    let currentNum = 1;
+    while (seatNumbersArray.length < quantity) {
+      const candidateCode = `${seatPrefix}-${currentNum}`;
+      if (!bookedSeatCodes.has(candidateCode)) {
+        seatNumbersArray.push(candidateCode);
+      }
+      currentNum++;
+    }
 
     // Grab current 24 hour time (Requirement 4)
     const now = new Date();
@@ -413,7 +520,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
     triggerNotification(`Pendaftaran SAGATIX berhasil dipesan sebagai ${selectedRole.name}!`);
   };
 
-  const handleAuthSubmit = (e: React.FormEvent) => {
+  const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!authEmail.trim() || !authPassword.trim()) {
       triggerNotification('Mohon lengkapi email dan password!');
@@ -424,42 +531,68 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
       return;
     }
 
-    const resolvedName = authMode === 'signup' ? authFullName.trim() : authEmail.split('@')[0];
-    const loggedUser = { fullName: resolvedName, email: authEmail.trim(), role: authRole };
+    try {
+      if (authMode === 'signup') {
+        const userCredential = await createUserWithEmailAndPassword(auth, authEmail.trim(), authPassword.trim());
+        const user = userCredential.user;
+        await updateProfile(user, { displayName: authFullName.trim() });
+        
+        await setDoc(doc(db, 'users', user.uid), {
+          fullName: authFullName.trim(),
+          email: user.email,
+          role: authRole,
+          createdAt: new Date().toISOString()
+        });
 
-    onLoginUser(loggedUser);
-    triggerNotification(authMode === 'signup' ? `Pendaftaran Akun SAGATIX Berhasil! Halo ${resolvedName}` : `Masuk Berhasil! Selamat datang kembali, ${resolvedName}`);
-
-    // Restore drafting local progress
-    const savedDraft = localStorage.getItem(`sagatix_draft_${event.id}`);
-    if (savedDraft) {
-      try {
-        const parsed = JSON.parse(savedDraft);
-        if (parsed.quantity) setQuantity(parsed.quantity);
-      } catch (err) {
-        console.error("Failed to restore draft:", err);
+        if (authRole === 'admin') {
+          await setDoc(doc(db, 'admins', user.uid), {
+            email: user.email,
+            createdAt: new Date().toISOString()
+          });
+        }
+        
+        triggerNotification(`Pendaftaran Akun SAGATIX Berhasil! Halo ${authFullName.trim()}`);
+      } else {
+        await signInWithEmailAndPassword(auth, authEmail.trim(), authPassword.trim());
+        triggerNotification(`Masuk Berhasil! Selamat datang kembali.`);
       }
-    }
 
-    // Auto-populate default fields in custom form responses
-    setFormResponses(prev => ({
-      ...prev,
-      name: resolvedName,
-      email: authEmail.trim()
-    }));
+      // Restore drafting local progress
+      const savedDraft = localStorage.getItem(`sagatix_draft_${event.id}`);
+      if (savedDraft) {
+        try {
+          const parsed = JSON.parse(savedDraft);
+          if (parsed.quantity) setQuantity(parsed.quantity);
+        } catch (err) {
+          console.error("Failed to restore draft:", err);
+        }
+      }
 
-    // Dismiss authorization modal view
-    setAuthMode(null);
+      const resolvedName = authMode === 'signup' ? authFullName.trim() : (auth.currentUser?.displayName || authEmail.split('@')[0]);
 
-    // Continue to next steps (Form fill)
-    if (sections.length > 0) {
-      setCurrentStep(3);
-      setCurrentSectionIdx(0);
-    } else if (!selectedRole.isTeamType && quantity > 1) {
-      setCurrentStep(4);
-      setTicketHolders(Array(quantity - 1).fill(''));
-    } else {
-      submitRegistration();
+      // Auto-populate default fields in custom form responses
+      setFormResponses(prev => ({
+        ...prev,
+        name: resolvedName,
+        email: authEmail.trim()
+      }));
+
+      // Dismiss authorization modal view
+      setAuthMode(null);
+
+      // Continue to next steps (Form fill)
+      if (sections.length > 0) {
+        setCurrentStep(3);
+        setCurrentSectionIdx(0);
+      } else if (!selectedRole.isTeamType && quantity > 1) {
+        setCurrentStep(4);
+        setTicketHolders(Array(quantity - 1).fill(''));
+      } else {
+        submitRegistration();
+      }
+    } catch (err: any) {
+      console.error("Firebase auth error:", err);
+      triggerNotification(`Gagal Autentikasi: ${err.message || err}`);
     }
   };
 
@@ -480,7 +613,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
     }
   };
 
-  const handleDownloadTicketPNG = (receipt: PurchasedTicket) => {
+  const handleDownloadTicketPNG = async (receipt: PurchasedTicket) => {
     if (!receipt) return;
     try {
       const canvas = document.createElement('canvas');
@@ -561,23 +694,23 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
       ctx.fillText('Rp ' + new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 }).format(receipt.totalAmount), 505, 165);
 
       // Bottom section (QR Code on Left, security rules on right)
-      // Custom QR Code drawing: grid of squares
       const qrStartX = 35;
       const qrStartY = 240;
-      const cellSize = 11;
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(qrStartX - 5, qrStartY - 5, (7 * cellSize) + 10, (7 * cellSize) + 10);
-      
-      ctx.fillStyle = '#0f172a';
-      for (let r = 0; r < 7; r++) {
-        for (let c = 0; c < 7; c++) {
-          if ((r === 0 || r === 6 || c === 0 || c === 6) ||
-              (r >= 2 && r <= 4 && c >= 2 && c <= 4) ||
-              (r + c * 3) % 4 === 0) {
-            ctx.fillRect(qrStartX + c * cellSize, qrStartY + r * cellSize, cellSize, cellSize);
-          }
+
+      // Draw real QR code using local qrcode package
+      const qrCanvas = document.createElement('canvas');
+      const checkinUrl = `${window.location.origin}/?checkin=${receipt.ticketCode}`;
+      await QRCodeLib.toCanvas(qrCanvas, checkinUrl, {
+        margin: 1,
+        width: 80,
+        color: {
+          dark: '#0f172a',
+          light: '#ffffff'
         }
-      }
+      });
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(qrStartX - 5, qrStartY - 5, 80 + 10, 80 + 10);
+      ctx.drawImage(qrCanvas, qrStartX, qrStartY, 80, 80);
 
       // Ticket Code label
       ctx.fillStyle = '#ffffff';
@@ -631,7 +764,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
           src={event.imageUrl}
           alt={event.title}
           referrerPolicy="no-referrer"
-          className="w-full h-full object-cover"
+          className="w-full h-full object-contain bg-slate-950"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent" />
         
@@ -762,11 +895,11 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
                 Silakan pelajari tata letak tribun panggung serta area penonton di bawah ini sebelum melanjutkan pembelian pendaftaran tiket.
               </p>
 
-              <div className="rounded-xl overflow-hidden border border-outline-variant bg-surface-dim shadow-sm">
+              <div className="rounded-xl overflow-hidden border border-outline-variant bg-slate-950/20 shadow-sm flex justify-center">
                 <img
                   src={event.seatingChartUrl}
                   alt="Denah Layout Panggung & Pembagian Kelas"
-                  className="w-full h-auto object-cover max-h-96"
+                  className="w-full h-auto object-contain max-h-[600px]"
                 />
               </div>
             </section>
@@ -790,107 +923,24 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
                   <div className="border-b border-outline-variant/50 pb-3 text-center space-y-1">
                     <h3 className="text-xs font-black text-primary uppercase tracking-widest flex items-center justify-center gap-1.5">
                       <Shield className="w-4 h-4 text-primary" />
-                      <span>Sistem Pengaman Akun</span>
+                      <span>Hubungkan Akun</span>
                     </h3>
-                    <p className="text-[10px] text-on-surface-variant leading-relaxed font-semibold">
-                      Draf pemesanan Anda disimpan secara lokal. Silakan masuk atau daftar akun untuk melanjutkan pengisian data formulir.
+                    <p className="text-[10px] text-on-surface-variant leading-relaxed font-bold">
+                      Draf pemesanan Anda disimpan secara lokal. Silakan masuk menggunakan akun Google Anda untuk melanjutkan pengisian data formulir.
                     </p>
                   </div>
 
-                  {/* Auth mode switcher tabs */}
-                  <div className="grid grid-cols-2 bg-surface-container-high p-1 rounded-xl border border-outline-variant text-[11px] font-extrabold text-center">
-                    <button
-                      type="button"
-                      onClick={() => setAuthMode('signup')}
-                      className={`py-2 rounded-lg transition-all cursor-pointer ${
-                        authMode === 'signup'
-                          ? 'bg-primary text-on-primary shadow-xs'
-                          : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-variant/30'
-                      }`}
-                    >
-                      Daftar Baru
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAuthMode('login')}
-                      className={`py-2 rounded-lg transition-all cursor-pointer ${
-                        authMode === 'login'
-                          ? 'bg-primary text-on-primary shadow-xs'
-                          : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-variant/30'
-                      }`}
-                    >
-                      Masuk Akun (Login)
-                    </button>
-                  </div>
-
-                  <form onSubmit={handleAuthSubmit} className="space-y-3.5">
-                    {authMode === 'signup' && (
-                      <div className="space-y-1 text-xs">
-                        <label className="font-extrabold text-on-surface-variant text-[10px]/normal uppercase tracking-wider block">Nama Lengkap Anda</label>
-                        <input
-                          type="text"
-                          required
-                          value={authFullName}
-                          onChange={(e) => setAuthFullName(e.target.value)}
-                          placeholder="e.g. Fathir Onmy"
-                          className="w-full bg-surface outline-hidden rounded-lg border border-outline-variant px-3 py-2 text-xs focus:ring-1 focus:ring-primary font-medium"
-                        />
-                      </div>
-                    )}
-
-                    <div className="space-y-1 text-xs">
-                      <label className="font-extrabold text-on-surface-variant text-[10px]/normal uppercase tracking-wider block">Alamat Email Kontak</label>
-                      <input
-                        type="email"
-                        required
-                        value={authEmail}
-                        onChange={(e) => setAuthEmail(e.target.value)}
-                        placeholder="fathironmy4@gmail.com"
-                        className="w-full bg-surface outline-hidden rounded-lg border border-outline-variant px-3 py-2 text-xs focus:ring-1 focus:ring-primary font-medium"
-                      />
-                    </div>
-
-                    <div className="space-y-1 text-xs">
-                      <label className="font-extrabold text-on-surface-variant text-[10px]/normal uppercase tracking-wider block">Kata Sandi Baru</label>
-                      <input
-                        type="password"
-                        required
-                        value={authPassword}
-                        onChange={(e) => setAuthPassword(e.target.value)}
-                        placeholder="••••••••"
-                        className="w-full bg-surface outline-hidden rounded-lg border border-outline-variant px-3 py-2 text-xs focus:ring-1 focus:ring-primary font-medium"
-                      />
-                    </div>
-
-                    <div className="space-y-1 text-xs">
-                      <label className="font-extrabold text-on-surface-variant text-[10px]/normal uppercase tracking-wider block">Pilih Peran Akun (Role)</label>
+                  <div className="space-y-4">
+                    <div className="space-y-1 text-xs text-left">
+                      <label className="font-extrabold text-on-surface-variant text-[10px]/normal uppercase tracking-wider block">Pilih Peran Akun Anda (Role)</label>
                       <select
                         value={authRole}
                         onChange={(e) => setAuthRole(e.target.value as 'admin' | 'biasa')}
-                        className="w-full bg-slate-50 outline-hidden rounded-lg border border-outline-variant px-3 py-2 text-xs focus:ring-1 focus:ring-primary font-bold text-on-surface"
+                        className="w-full bg-slate-50 outline-hidden rounded-lg border border-outline-variant px-3 py-2 text-xs focus:ring-1 focus:ring-primary font-bold text-on-surface cursor-pointer"
                       >
                         <option value="biasa">👤 Pengguna Biasa (Pesan Tiket)</option>
                         <option value="admin">🔑 Administrator (Kelola Event & Scanner)</option>
                       </select>
-                    </div>
-
-                    <div className="pt-2">
-                      <button
-                        type="submit"
-                        className="w-full bg-primary text-on-primary py-2.5 rounded-xl font-black text-xs hover:opacity-90 active:scale-98 transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
-                      >
-                        <span>{authMode === 'signup' ? 'Daftar & Teruskan Draf' : 'Masuk & Pulihkan Draf'}</span>
-                        <ChevronRight className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    <div className="relative my-2.5">
-                      <div className="absolute inset-0 flex items-center" aria-hidden="true">
-                        <div className="w-full border-t border-outline-variant/60"></div>
-                      </div>
-                      <div className="relative flex justify-center text-[9px] font-bold uppercase tracking-wider">
-                        <span className="bg-surface-container px-2 text-on-surface-variant">Atau</span>
-                      </div>
                     </div>
 
                     <button
@@ -899,34 +949,50 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
                         try {
                           const user = await signInWithGoogle();
                           if (user) {
-                            const enriched = {
+                            await setDoc(doc(db, 'users', user.uid), {
                               fullName: user.displayName || user.email?.split('@')[0] || 'User',
+                              email: user.email,
+                              role: authRole || 'biasa',
+                              createdAt: new Date().toISOString()
+                            });
+
+                            if (authRole === 'admin') {
+                              await setDoc(doc(db, 'admins', user.uid), {
+                                email: user.email,
+                                createdAt: new Date().toISOString()
+                              });
+                            }
+                            
+                            // Trigger callback
+                            onLoginUser({
+                              fullName: user.displayName || 'Google User',
                               email: user.email || '',
-                              role: (user.email === 'fathironmy4@gmail.com' || user.email === 'fathironmy@gmail.com') ? ('admin' as const) : authRole
-                            };
-                            onLoginUser(enriched);
-                            triggerNotification(`Koneksi Akun Google Sukses! Halo ${enriched.fullName}`);
+                              role: authRole || 'biasa'
+                            });
+                            setAuthMode(null);
+                            triggerNotification(`🔑 Login Google sukses! Halo ${user.displayName || user.email?.split('@')[0]}`);
                           }
                         } catch (err: any) {
+                          console.error("Google login failure", err);
                           triggerNotification(`Gagal masuk Google: ${err.message || err}`);
                         }
                       }}
-                      className="w-full flex items-center justify-center gap-2 bg-white text-gray-800 border border-gray-300 py-2.5 rounded-xl font-bold text-xs hover:bg-gray-50 active:scale-98 transition-all cursor-pointer shadow-xs font-sans"
+                      className="w-full flex items-center justify-center gap-2.5 bg-[#4285f4] text-white py-3 rounded-xl font-black text-xs hover:bg-[#357ae8] active:scale-98 transition-all cursor-pointer shadow-md border-0"
                     >
-                      <svg className="w-4 h-4 fill-current text-gray-700 shrink-0" viewBox="0 0 24 24">
+                      <svg className="w-4 h-4 fill-white shrink-0" viewBox="0 0 24 24">
                         <path d="M12.24 10.285V13.4h6.887c-.275 1.565-1.88 4.604-6.887 4.604-4.33 0-7.866-3.577-7.866-8s3.536-8 7.866-8c2.46 0 4.105 1.025 5.047 1.926l2.427-2.334C17.955 2.192 15.34 1 12.24 1 5.48 1 0 6.48 0 13s5.48 12 12.24 12c7.06 0 11.75-4.97 11.75-11.97 0-.81-.08-1.43-.19-2.03l-11.56.285z"/>
                       </svg>
-                      <span>Hubungkan Google</span>
+                      <span>Masuk dengan Akun Google</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => setAuthMode(null)}
-                      className="w-full text-center text-[10px] uppercase font-black tracking-wider text-on-surface-low border border-outline-variant hover:bg-surface-container py-1.5 rounded-lg transition-all cursor-pointer"
+                      className="w-full text-center text-[10px] uppercase font-black tracking-wider text-on-surface-low border border-outline-variant hover:bg-surface-container py-2.5 rounded-xl transition-all cursor-pointer bg-transparent"
                     >
                       Batal Hubungkan
                     </button>
-                  </form>
+                  </div>
                 </motion.div>
               ) : currentStep <= 4 ? (
                 
@@ -965,7 +1031,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
                     <div className="space-y-4">
 
                       {queueStatus === 'waiting' ? (
-                        /* QUEUE WAITING SCREEN (Requirement 3: Antrean Bandwidth Ringan) */
+                        /* QUEUE WAITING SCREEN (Requirement 3: Antrean Bandwidth Ringan / New Requirement 8) */
                         <motion.div
                           initial={{ opacity: 0, scale: 0.95 }}
                           animate={{ opacity: 1, scale: 1 }}
@@ -976,37 +1042,76 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
                           </div>
 
                           <div className="space-y-1">
-                            <h4 className="text-xs font-black text-primary tracking-widest uppercase">RUANG ANTRIAN BANDWIDTH MULUS</h4>
+                            <h4 className="text-xs font-black text-primary tracking-widest uppercase">RUANG ANTRIAN BEBAN TRAFFIC</h4>
                             <p className="text-[10px] text-on-surface-variant leading-relaxed max-w-xs mx-auto">
-                              Sistem mendeteksi antrean pendaftaran sedang aktif. Silakan tunggu giliran Anda demi kelancaran alokasi data server yang andal.
+                              Sistem mendeteksi lalu lintas pendaftaran sedang sangat tinggi. Silakan tunggu hingga giliran Anda tiba.
                             </p>
                           </div>
 
-                          {/* Unique Queue ID Box */}
-                          <div className="bg-white rounded-xl border border-outline-variant p-3 max-w-xs mx-auto space-y-1">
-                            <span className="text-[9px] text-on-surface-variant font-bold uppercase tracking-wider block">NOMOR ANTRIAN ANDA:</span>
-                            <span className="font-mono font-black text-lg text-primary tracking-widest">Antrean #{queueNumber}</span>
-                          </div>
+                          {/* People in Front Box */}
+                          {(() => {
+                            const peopleInFront = Math.max(0, Math.ceil(secondsLeftInQueue / 2));
+                            if (peopleInFront > 0) {
+                              return (
+                                <div className="bg-white rounded-xl border border-outline-variant p-4 max-w-xs mx-auto space-y-2">
+                                  <div>
+                                    <span className="text-[9px] text-on-surface-variant font-bold uppercase tracking-wider block">NOMOR ANTRIAN ANDA:</span>
+                                    <span className="font-mono font-black text-base text-primary tracking-widest">#{queueNumber}</span>
+                                  </div>
+                                  <div className="border-t border-outline-variant/65 pt-2">
+                                    <span className="text-[10px] text-on-surface-variant font-bold block">Status Antrean:</span>
+                                    <span className="text-xs font-extrabold text-amber-600 animate-pulse block">👥 Ada {peopleInFront} orang di depan Anda</span>
+                                  </div>
+                                </div>
+                              );
+                            } else {
+                              return (
+                                <div className="bg-emerald-50 rounded-xl border border-emerald-300 p-4 max-w-xs mx-auto space-y-3">
+                                  <div className="text-center">
+                                    <span className="text-xs font-black text-emerald-800 uppercase tracking-widest block">🎉 SEKARANG GILIRAN ANDA!</span>
+                                    <p className="text-[9px] text-emerald-700 leading-normal font-semibold mt-1">
+                                      Tempat antrean Anda sudah tersedia. Silakan klik tombol di bawah untuk melanjutkan pengisian data formulir.
+                                    </p>
+                                  </div>
+                                  
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setQueueStatus('passed');
+                                      setCurrentStep(2);
+                                    }}
+                                    className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 text-xs font-black py-2.5 rounded-xl cursor-pointer transition-all active:scale-95 border-0 shadow-sm"
+                                  >
+                                    Lanjutkan Pengisian Formulir
+                                  </button>
+                                </div>
+                              );
+                            }
+                          })()}
 
                           {/* Loading progress bar */}
-                          <div className="space-y-2 max-w-xs mx-auto">
-                            <div className="flex justify-between items-center text-[10px] font-bold text-on-surface-variant">
-                              <span>Menghubungkan slot...</span>
-                              <span>Est. {secondsLeftInQueue} dtk sisa</span>
+                          {Math.max(0, Math.ceil(secondsLeftInQueue / 2)) > 0 && (
+                            <div className="space-y-2 max-w-xs mx-auto">
+                              <div className="flex justify-between items-center text-[10px] font-bold text-on-surface-variant">
+                                <span>Menghubungkan slot...</span>
+                                <span>Est. {secondsLeftInQueue} dtk sisa</span>
+                              </div>
+                              <div className="h-2 w-full bg-surface-container-highest rounded-full overflow-hidden">
+                                <motion.div
+                                  className="h-full bg-primary"
+                                  initial={{ width: '0%' }}
+                                  animate={{ width: `${100 - secondsLeftInQueue * 10}%` }}
+                                  transition={{ ease: 'linear', duration: 1 }}
+                                />
+                              </div>
                             </div>
-                            <div className="h-2 w-full bg-surface-container-highest rounded-full overflow-hidden">
-                              <motion.div
-                                className="h-full bg-primary"
-                                initial={{ width: '0%' }}
-                                animate={{ width: `${100 - secondsLeftInQueue * 10}%` }}
-                                transition={{ ease: 'linear', duration: 1 }}
-                              />
-                            </div>
-                          </div>
+                          )}
 
-                          <p className="text-[9px] text-on-surface-variant italic">
-                            Jangan tutup halaman ini. Formulir tiket kelas akan dibuka otomatis begitu antrean Anda diproses.
-                          </p>
+                          {Math.max(0, Math.ceil(secondsLeftInQueue / 2)) > 0 && (
+                            <p className="text-[9px] text-on-surface-variant italic">
+                              Jangan tutup halaman ini. Ruang pemilihan kelas tiket akan dibuka setelah antrean Anda habis.
+                            </p>
+                          )}
                         </motion.div>
                       ) : (
                         /* NORMAL ROLE SELECTION OR COUNTDOWN LOCK */
@@ -1042,7 +1147,10 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
                                   key={role.id}
                                   type="button"
                                   disabled={isRegistrationLocked}
-                                  onClick={() => setSelectedRole(role)}
+                                  onClick={() => {
+                                    setSelectedRole(role);
+                                    setSelectedTier(null);
+                                  }}
                                   className={`w-full p-4 rounded-xl border-2 text-left transition-all relative ${
                                     isRegistrationLocked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
                                   } ${
@@ -1236,8 +1344,13 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
                       </div>
 
                       <div className="space-y-3">
-                        {sections[currentSectionIdx].fields.map((field) => {
-                          const hasError = !!formErrors[field.id];
+                        {sections[currentSectionIdx].fields
+                          .filter(field => {
+                            const isFieldApplicable = !field.allowedTierIds || field.allowedTierIds.length === 0 || (selectedTier && field.allowedTierIds.includes(selectedTier.id));
+                            return isFieldApplicable;
+                          })
+                          .map((field) => {
+                            const hasError = !!formErrors[field.id];
                           return (
                             <div key={field.id} className="space-y-1 text-xs">
                               <div className="flex justify-between items-center font-bold">
@@ -1530,7 +1643,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
                           {Object.keys(purchasedReceipt.formResponses).slice(0, 5).map(key => {
                             const val = purchasedReceipt.formResponses[key];
                             if (!val) return null;
-                            const labelText = key.replace(/_/g, ' ');
+                            const labelText = getFieldLabelFromEvent(key, event);
                             return (
                               <div key={key} className="flex justify-between truncate">
                                 <span className="capitalize">{labelText}:</span>
@@ -1549,24 +1662,10 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
 
                     {/* QR Code */}
                     <div className="mt-4 pt-3 border-t border-primary/20 flex flex-col items-center gap-1.5">
-                      <div className="bg-white p-2 rounded-lg border border-outline-variant flex flex-col items-center gap-1">
-                        <div className="w-20 h-20 bg-slate-900 flex flex-wrap gap-0.5">
-                          {Array.from({ length: 49 }).map((_, i) => (
-                            <div
-                              key={i}
-                              className={`w-[10px] h-[10px] rounded-xs ${
-                                (i * 3 + 11) % 4 === 0 || i < 5 || i > 43 || (i % 7 === 0 && i < 21)
-                                  ? 'bg-slate-900'
-                                  : 'bg-white'
-                              }`}
-                            />
-                          ))}
-                        </div>
-                        <span className="font-mono text-[8px] font-bold tracking-widest text-on-surface-variant">
-                          {purchasedReceipt?.ticketCode}
-                        </span>
-                      </div>
-                      <span className="text-[8px] text-on-surface-variant font-semibold text-center leading-normal">
+                      {purchasedReceipt && (
+                        <QRCode value={purchasedReceipt.ticketCode} size={80} />
+                      )}
+                      <span className="text-[8px] text-on-surface-variant font-semibold text-center leading-normal mt-1">
                         Pass QR valid. Seluruh riwayat aman tersimpan di tab <strong>Tiket Saya</strong>.
                       </span>
                     </div>

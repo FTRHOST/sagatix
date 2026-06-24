@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Category, Event, PurchasedTicket, LandingPageConfig } from './types';
+import { Category, Event, PurchasedTicket, LandingPageConfig, TicketTier } from './types';
 import { INITIAL_EVENTS } from './mockData';
 import { 
   auth, 
@@ -14,11 +14,13 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { 
   doc, 
   setDoc, 
+  getDoc,
   onSnapshot, 
   collection, 
   updateDoc, 
   query, 
-  where 
+  where,
+  deleteDoc
 } from 'firebase/firestore';
 import { EventCard } from './components/EventCard';
 import { EventDetailPage } from './components/EventDetailPage';
@@ -50,28 +52,28 @@ import {
   ShieldAlert,
   Camera,
   RefreshCw,
-  Clock
+  Clock,
+  Trash,
+  Download
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function App() {
   // Navigation Tab Utama: 'explore' | 'tickets' | 'help' | 'admin' (Requirement 3 & 10)
   const [activeTab, setActiveTab] = useState<'explore' | 'tickets' | 'help' | 'admin'>('explore');
+  const [adminSubTab, setAdminSubTab] = useState<'scanner' | 'config' | 'sandbox' | 'events'>('events');
+  const [eventToEdit, setEventToEdit] = useState<Event | null>(null);
+  const [selectedManageSeatsEvent, setSelectedManageSeatsEvent] = useState<Event | null>(null);
+  const [selectedManageSeatsTier, setSelectedManageSeatsTier] = useState<TicketTier | null>(null);
+  const [selectedRegistrantsEvent, setSelectedRegistrantsEvent] = useState<Event | null>(null);
+  const [registrantSearchQuery, setRegistrantSearchQuery] = useState('');
 
   // Authentication State (Requirement 8)
   const [currentUser, setCurrentUser] = useState<{ fullName: string; email: string; role?: 'admin' | 'biasa' } | null>(() => {
     const saved = localStorage.getItem('sagatix_user');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (!parsed.role) parsed.role = 'admin';
-        return parsed;
-      } catch (e) {
-        // Fall through
-      }
-    }
-    return { fullName: 'Fathir Onmy', email: 'fathironmy4@gmail.com', role: 'admin' };
+    return saved ? JSON.parse(saved) : null;
   });
+  const [authLoading, setAuthLoading] = useState(true);
 
   // Configuration settings for Landing Page CTA and Tips (Requirement: Admin Landing Page Config)
   const [landingConfig, setLandingConfig] = useState<LandingPageConfig>({
@@ -84,8 +86,24 @@ export default function App() {
       'Lengkapi data anggota tim Anda terlebih dahulu untuk pendaftaran lomba.',
       'Unduh file e-tiket berformat PNG secara offline sebelum memasuki arena stadium.',
       'Layanan bantuan Sagatix aktif 24 jam untuk membantu jika Anda mengalami kendala pembayaran.'
-    ]
+    ],
+    ctaLink: '#explore-catalog',
+    isCtaEnabled: true,
+    isTipsEnabled: true,
+    platformFeePercent: 5,
+    isPlatformFeeEnabled: true
   });
+
+  const [draftLandingConfig, setDraftLandingConfig] = useState<LandingPageConfig | null>(null);
+  
+  const activeLandingConfig = draftLandingConfig || landingConfig;
+
+  const handleUpdateDraftLandingConfig = (updater: (prev: LandingPageConfig) => LandingPageConfig) => {
+    setDraftLandingConfig(prev => {
+      const base = prev || landingConfig;
+      return updater(base);
+    });
+  };
 
   // State Utama Aplikasi
   const [events, setEvents] = useState<Event[]>(INITIAL_EVENTS);
@@ -97,29 +115,58 @@ export default function App() {
 
   // Firebase auth state synchronizer
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        const saved = localStorage.getItem('sagatix_user');
-        let role: 'admin' | 'biasa' = 'biasa';
-        if (saved) {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      try {
+        if (user) {
+          let role: 'admin' | 'biasa' = 'biasa';
+          let fullName = user.displayName || user.email?.split('@')[0] || 'Pengguna Google';
+          
           try {
-            const parsed = JSON.parse(saved);
-            if (parsed.role === 'admin') role = 'admin';
-          } catch (e) {}
+            const userDocRef = doc(db, 'users', user.uid);
+            const userDocSnap = await getDoc(userDocRef);
+            if (userDocSnap.exists()) {
+              const userData = userDocSnap.data();
+              role = userData.role || 'biasa';
+              fullName = userData.fullName || fullName;
+            } else {
+              if (user.email === 'fathironmy4@gmail.com' || user.email === 'fathironmy@gmail.com') {
+                role = 'admin';
+              }
+              await setDoc(userDocRef, {
+                fullName: fullName,
+                email: user.email || '',
+                role: role,
+                createdAt: new Date().toISOString()
+              });
+
+              if (role === 'admin') {
+                await setDoc(doc(db, 'admins', user.uid), {
+                  email: user.email,
+                  createdAt: new Date().toISOString()
+                });
+              }
+            }
+          } catch (e) {
+            console.error("Error loading/saving user profile in Firestore:", e);
+          }
+
+          if (user.email === 'fathironmy4@gmail.com' || user.email === 'fathironmy@gmail.com') {
+            role = 'admin';
+          }
+
+          const enrichedUser = {
+            fullName: fullName,
+            email: user.email || '',
+            role: role
+          };
+          setCurrentUser(enrichedUser);
+          localStorage.setItem('sagatix_user', JSON.stringify(enrichedUser));
+        } else {
+          setCurrentUser(null);
+          localStorage.removeItem('sagatix_user');
         }
-        if (user.email === 'fathironmy4@gmail.com' || user.email === 'fathironmy@gmail.com') {
-          role = 'admin';
-        }
-        const enrichedUser = {
-          fullName: user.displayName || user.email?.split('@')[0] || 'Pengguna Google',
-          email: user.email || '',
-          role: role
-        };
-        setCurrentUser(enrichedUser);
-        localStorage.setItem('sagatix_user', JSON.stringify(enrichedUser));
-      } else {
-        setCurrentUser(null);
-        localStorage.removeItem('sagatix_user');
+      } finally {
+        setAuthLoading(false);
       }
     });
     return () => unsubscribe();
@@ -182,20 +229,15 @@ export default function App() {
   }, [currentUser]);
 
   // Custom Groups Folder State (Requirement 6)
-  const [groups, setGroups] = useState<string[]>([
-    'E-sports League',
-    'Konser Musik Akbar',
-    'Seminar & Workshop'
-  ]);
-  const [eventGroupMap, setEventGroupMap] = useState<Record<string, string[]>>({
-    'evt-1': ['Konser Musik Akbar'],
-    'evt-2': ['E-sports League']
-  });
+  const [groups, setGroups] = useState<string[]>([]);
+  const [eventGroupMap, setEventGroupMap] = useState<Record<string, string[]>>({});
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<string | 'Semua'>('Semua');
   const [newGroupNameInput, setNewGroupNameInput] = useState('');
 
   // Sandbox & REST API Configuration (Requirement 3 & 5)
   const [isSandboxFailureMode, setIsSandboxFailureMode] = useState<boolean>(false);
+  const [isSandboxTrafficActive, setIsSandboxTrafficActive] = useState<boolean>(false);
+  const [isSandboxCountdownActive, setIsSandboxCountdownActive] = useState<boolean>(false);
   const [apiTerminalOutput, setApiTerminalOutput] = useState<string>("Tekan tombol 'Uji Live' untuk melihat respon JSON dari endpoint REST API secara real-time...");
   const [apiTerminalLoading, setApiTerminalLoading] = useState<boolean>(false);
 
@@ -219,6 +261,27 @@ export default function App() {
   const [adminScannedTicket, setAdminScannedTicket] = useState<PurchasedTicket | null>(null);
   const [isAdminScanning, setIsAdminScanning] = useState(false);
   const [adminManualCode, setAdminManualCode] = useState('');
+
+  // Load landingConfig from Firestore (Requirement 8)
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'config', 'landing'), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data() as LandingPageConfig;
+        setLandingConfig(data);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  const handlePublishLandingConfig = async (newConfig: LandingPageConfig) => {
+    try {
+      await setDoc(doc(db, 'config', 'landing'), sanitizeForFirestore(newConfig));
+      triggerNotification("Kustomisasi halaman berhasil dipublikasikan secara live!");
+    } catch (err) {
+      console.error("Failed to publish landing config to Firestore", err);
+      triggerNotification("Gagal mempublikasikan perubahan.");
+    }
+  };
 
   // Menambahkan & menghapus favorit
   const handleToggleFavorite = (eventId: string, e: React.MouseEvent) => {
@@ -320,7 +383,9 @@ export default function App() {
     try {
       await setDoc(doc(db, 'events', newEvent.id), sanitizeForFirestore(newEvent));
       setIsCreateModalOpen(false);
-      triggerNotification('Acara berhasil dipublikasikan!');
+      const isEdit = !!eventToEdit;
+      setEventToEdit(null);
+      triggerNotification(isEdit ? 'Acara berhasil diperbarui!' : 'Acara berhasil dipublikasikan!');
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `events/${newEvent.id}`);
     }
@@ -333,7 +398,8 @@ export default function App() {
       const docData = {
         ...newTicket,
         userId: firebaseUser ? firebaseUser.uid : 'anonymous',
-        userEmail: firebaseUser ? firebaseUser.email : 'anonymous@gmail.com'
+        userEmail: firebaseUser ? firebaseUser.email : 'anonymous@gmail.com',
+        userName: currentUser?.fullName || firebaseUser?.displayName || 'anonymous'
       };
 
       await setDoc(doc(db, 'tickets', newTicket.id), sanitizeForFirestore(docData));
@@ -458,6 +524,17 @@ export default function App() {
     });
   }, [events, selectedCategory, activeFilterTab, selectedGroupFilter, searchQuery, priceMaxLimit, selectedLocation, dateFilter, favorites, pinnedEventIds, eventGroupMap]);
 
+  if (authLoading) {
+    return (
+      <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center z-50">
+        <div className="space-y-4 text-center">
+          <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-xs font-bold text-slate-400 tracking-wider animate-pulse">Menghubungkan ke Sagatix...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-surface text-on-surface flex flex-col font-sans antialiased selection:bg-primary/20 selection:text-primary transition-colors duration-200 pb-20 lg:pb-0">
 
@@ -514,15 +591,18 @@ export default function App() {
             </button>
             {currentUser?.role === 'admin' && (
               <button
-                onClick={() => setActiveTab('admin')}
+                onClick={() => {
+                  setSelectedDetailsEvent(null);
+                  setActiveTab('admin');
+                }}
                 className={`px-5 py-2 rounded-full transition-all cursor-pointer flex items-center gap-1.5 ${
                   activeTab === 'admin'
                     ? 'bg-primary text-on-primary shadow-xs font-black'
                     : 'text-on-surface-variant hover:text-on-surface'
                 }`}
               >
-                <QrCode className="w-4 h-4" />
-                <span>Absensi Admin</span>
+                <SlidersHorizontal className="w-4 h-4" />
+                <span>Panel Admin</span>
               </button>
             )}
             <button
@@ -536,22 +616,6 @@ export default function App() {
               <HelpCircle className="w-4 h-4" />
               <span>Bantuan</span>
             </button>
-            {currentUser?.role === 'admin' && (
-              <button
-                onClick={() => {
-                  setSelectedDetailsEvent(null);
-                  setActiveTab('sandbox');
-                }}
-                className={`px-5 py-2 rounded-full transition-all cursor-pointer flex items-center gap-1.5 ${
-                  activeTab === 'sandbox'
-                    ? 'bg-primary text-on-primary shadow-xs font-black'
-                    : 'text-on-surface-variant hover:text-on-surface'
-                }`}
-              >
-                <SlidersHorizontal className="w-4 h-4" />
-                <span>Sandbox Uji Coba</span>
-              </button>
-            )}
           </div>
         </div>
 
@@ -587,15 +651,34 @@ export default function App() {
                 <div className="flex flex-col gap-1">
                   <select
                     value={currentUser.role || 'biasa'}
-                    onChange={(e) => {
+                    onChange={async (e) => {
                       const selectedRole = e.target.value as 'admin' | 'biasa';
-                      const updatedUser = { ...currentUser, role: selectedRole };
-                      setCurrentUser(updatedUser);
-                      localStorage.setItem('sagatix_user', JSON.stringify(updatedUser));
-                      triggerNotification(`Kini Anda berperan sebagai ${selectedRole.toUpperCase()}!`);
-                      if (selectedRole === 'biasa' && (activeTab === 'admin' || activeTab === 'sandbox')) {
-                        setSelectedDetailsEvent(null);
-                        setActiveTab('explore');
+                      const firebaseUser = auth.currentUser;
+                      if (firebaseUser) {
+                        try {
+                          await setDoc(doc(db, 'users', firebaseUser.uid), {
+                            fullName: currentUser.fullName,
+                            email: currentUser.email,
+                            role: selectedRole,
+                            updatedAt: new Date().toISOString()
+                          }, { merge: true });
+
+                          if (selectedRole === 'admin') {
+                            await setDoc(doc(db, 'admins', firebaseUser.uid), {
+                              email: firebaseUser.email,
+                              createdAt: new Date().toISOString()
+                            });
+                          }
+                          
+                          triggerNotification(`Peran berhasil disimpan ke Firebase: ${selectedRole.toUpperCase()}`);
+                          if (selectedRole === 'biasa' && (activeTab === 'admin')) {
+                            setSelectedDetailsEvent(null);
+                            setActiveTab('explore');
+                          }
+                        } catch (err) {
+                          console.error("Gagal memperbarui peran di Firebase:", err);
+                          triggerNotification("Gagal memperbarui peran di Firebase");
+                        }
                       }
                     }}
                     className="text-[9.5px] font-extrabold bg-surface text-on-surface hover:bg-slate-50 border border-outline rounded px-1.5 py-0.5 cursor-pointer outline-hidden transition-all"
@@ -880,6 +963,11 @@ export default function App() {
                   currentUser={currentUser}
                   onLoginUser={handleLoginUser}
                   isSandboxFailureMode={isSandboxFailureMode}
+                  isSandboxTrafficActive={isSandboxTrafficActive}
+                  isSandboxCountdownActive={isSandboxCountdownActive}
+                  tickets={purchasedTickets}
+                  isPlatformFeeEnabled={landingConfig.isPlatformFeeEnabled !== false}
+                  platformFeePercent={landingConfig.platformFeePercent ?? 5}
                 />
               </motion.div>
             ) : (
@@ -916,28 +1004,52 @@ export default function App() {
                   </div>
 
                   {/* HEADER PROMOSI (Requirement: Admin Landing Page Config) */}
-                  <div className="bg-linear-to-r from-primary/10 via-primary-fixed-dim/5 to-transparent rounded-2xl p-6 md:p-8 border border-outline-variant flex flex-col md:flex-row items-center justify-between gap-6">
-                    <div className="space-y-2.5 max-w-xl text-center md:text-left">
-                      <span className="text-[10px] font-black text-primary uppercase tracking-widest bg-primary/10 px-2.5 py-1 rounded-full border border-primary/20 animate-pulse">
-                        ⚡ {landingConfig.promoCode ? `KODE PROMO: ${landingConfig.promoCode}` : 'PENAWARAN KHUSUS'}
-                      </span>
-                      <h1 className="font-black text-2xl md:text-4xl text-on-surface tracking-tight leading-tight">
-                        {landingConfig.ctaTitle}
-                      </h1>
-                      <p className="text-xs md:text-sm text-on-surface-variant leading-relaxed font-semibold">
-                        {landingConfig.ctaDescription}
-                      </p>
+                  {landingConfig.isCtaEnabled !== false && (
+                    <div className="bg-linear-to-r from-primary/10 via-primary-fixed-dim/5 to-transparent rounded-2xl p-6 md:p-8 border border-outline-variant flex flex-col md:flex-row items-center justify-between gap-6">
+                      <div className="space-y-2.5 max-w-xl text-center md:text-left">
+                        <span className="text-[10px] font-black text-primary uppercase tracking-widest bg-primary/10 px-2.5 py-1 rounded-full border border-primary/20 animate-pulse">
+                          ⚡ {landingConfig.promoCode ? `KODE PROMO: ${landingConfig.promoCode}` : 'PENAWARAN KHUSUS'}
+                        </span>
+                        <h1 className="font-black text-2xl md:text-4xl text-on-surface tracking-tight leading-tight">
+                          {landingConfig.ctaTitle}
+                        </h1>
+                        <p className="text-xs md:text-sm text-on-surface-variant leading-relaxed font-semibold">
+                          {landingConfig.ctaDescription}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          if (landingConfig.ctaLink) {
+                            const targetEvent = events.find(e => e.id === landingConfig.ctaLink);
+                            if (targetEvent) {
+                              setSelectedDetailsEvent(targetEvent);
+                              return;
+                            }
+
+                            if (landingConfig.ctaLink.startsWith('http')) {
+                              window.open(landingConfig.ctaLink, '_blank');
+                            } else {
+                              const targetId = landingConfig.ctaLink.replace('#', '');
+                              const targetEl = document.getElementById(targetId);
+                              if (targetEl) {
+                                targetEl.scrollIntoView({ behavior: 'smooth' });
+                              } else {
+                                document.getElementById('explore-catalog')?.scrollIntoView({ behavior: 'smooth' });
+                              }
+                            }
+                          } else {
+                            document.getElementById('explore-catalog')?.scrollIntoView({ behavior: 'smooth' });
+                          }
+                        }}
+                        className="bg-primary text-on-primary font-bold text-xs px-6 py-3.5 rounded-xl hover:opacity-95 active:scale-95 transition-all whitespace-nowrap cursor-pointer shadow-md"
+                      >
+                        {landingConfig.ctaButtonText}
+                      </button>
                     </div>
-                    <button
-                      onClick={() => triggerNotification('Silakan pilih salah satu acara di bawah ini untuk memulai pemesanan tiket Anda')}
-                      className="bg-primary text-on-primary font-bold text-xs px-6 py-3.5 rounded-xl hover:opacity-95 active:scale-95 transition-all whitespace-nowrap cursor-pointer shadow-md"
-                    >
-                      {landingConfig.ctaButtonText}
-                    </button>
-                  </div>
+                  )}
 
                   {/* TIPS BOARD SECTION (Requirement: buat admin juga bisa mengatur tip atau cta nya pada landing page) */}
-                  {landingConfig.tips && landingConfig.tips.length > 0 && (
+                  {landingConfig.isTipsEnabled !== false && landingConfig.tips && landingConfig.tips.length > 0 && (
                     <div className="bg-surface-container rounded-2xl p-5 border border-outline-variant grid grid-cols-1 md:grid-cols-12 gap-5 items-center">
                       <div className="md:col-span-4 space-y-1.5 text-center md:text-left">
                         <div className="inline-flex items-center gap-1.5 text-[9px] font-black uppercase text-secondary bg-secondary-container px-2.5 py-1 rounded-full border border-outline-variant">
@@ -993,7 +1105,7 @@ export default function App() {
                   )}
 
                   {/* GRID CONTROLLER */}
-                  <div className="flex justify-between items-center pt-2">
+                  <div id="explore-catalog" className="flex justify-between items-center pt-2">
                     <h2 className="text-lg font-black text-on-surface flex items-center gap-2">
                       <span>Semua Kalender Acara</span>
                       <span className="text-xs bg-surface-container-high px-2 py-0.5 rounded-full text-on-surface-variant font-bold">
@@ -1102,6 +1214,7 @@ export default function App() {
                 <MyTicketsView
                   tickets={purchasedTickets}
                   onExploreClick={() => setActiveTab('explore')}
+                  events={events}
                 />
               </motion.div>
             )}
@@ -1113,388 +1226,1484 @@ export default function App() {
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -15 }}
-                className="space-y-6 max-w-5xl mx-auto"
+                className="space-y-6 max-w-6xl mx-auto"
               >
-                <div className="space-y-2 border-b border-outline-variant/60 pb-4">
+                {/* Header Title */}
+                <div className="space-y-2 border-b border-outline-variant/60 pb-3 text-left">
                   <span className="text-[10px] font-black tracking-widest text-primary uppercase bg-primary/10 px-3 py-1 rounded-full border border-primary/20">
-                    🔐 KHUSUS ADMINISTRATOR SAGATIX
+                    🔐 PANEL UTAMA ADMINISTRATOR & PENGEMBANG
                   </span>
-                  <h1 className="font-extrabold text-2xl md:text-3xl text-on-surface">Pintu Absensi & Validasi QR</h1>
+                  <h1 className="font-extrabold text-2xl md:text-3xl text-on-surface">Pusat Kendali Admin</h1>
                   <p className="text-xs text-on-surface-variant leading-relaxed">
-                    Gunakan panel ini untuk mensimulasikan pemisalan kamera pemindai (scanner QR Code) pada pintu masuk pertunjukan atau stadion.
+                    Kelola absensi tiket, ubah promo beranda utama, atau uji server REST API dalam satu tab terpadu.
                   </p>
                 </div>
 
-                {/* Simulated Scanning Frame & Output Screen */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                  
-                  {/* Left component: Scanning Simulator View */}
-                  <div className="lg:col-span-6 bg-slate-900 text-white rounded-3xl p-6 border-4 border-slate-800 shadow-2xl space-y-6 relative overflow-hidden">
-                    {/* Camera grid background effect */}
-                    <div className="absolute inset-0 bg-[radial-gradient(#ffffff08_1px,transparent_1px)] [background-size:16px_16px] pointer-events-none opacity-40" />
-
-                    <div className="flex items-center justify-between border-b border-white/10 pb-3 relative z-10">
-                      <span className="text-xs font-black tracking-widest text-emerald-400 flex items-center gap-1.5">
-                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
-                        SIMULATOR KAMERA SCANNER ACTIVE
-                      </span>
-                      <Camera className="w-5 h-5 text-slate-400" />
-                    </div>
-
-                    {/* Camera display placeholder box */}
-                    <div className="relative aspect-video rounded-2xl bg-black border border-white/5 overflow-hidden flex flex-col items-center justify-center text-center">
-                      
-                      {isAdminScanning ? (
-                        /* Simulated green laser sweeps across the screen */
-                        <div className="absolute inset-x-0 top-0 h-1 bg-emerald-500 shadow-[0_0_15px_#10b981] animate-[bounce_1.2s_infinite] z-20" />
-                      ) : null}
-
-                      {isAdminScanning ? (
-                        <div className="space-y-3 z-10">
-                          <RefreshCw className="w-9 h-9 text-emerald-400 animate-spin mx-auto" />
-                          <p className="text-xs font-bold font-mono text-emerald-400">Membaca data kode QR...</p>
-                        </div>
-                      ) : adminScannedTicket ? (
-                        /* Success Scan output */
-                        <kbd className="space-y-3 text-emerald-400 z-10 px-4 py-2">
-                          <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto" />
-                          <h4 className="text-sm font-black uppercase text-white">Verifikasi Berhasil</h4>
-                          <div className="text-[10px] bg-emerald-950/80 p-2.5 rounded-lg border border-emerald-500/30 text-emerald-200 font-mono space-y-1 text-left">
-                            <div>KODE: {adminScannedTicket.ticketCode}</div>
-                            <div>NAMA: {adminScannedTicket.formResponses['name'] || 'Fathir Onmy'}</div>
-                            <div>KELAS: {adminScannedTicket.tierName}</div>
-                            <div>KURSI: {adminScannedTicket.seatNumbers?.join(', ') || 'N/A'}</div>
-                          </div>
-                        </kbd>
-                      ) : (
-                        <div className="space-y-2 z-10 px-6">
-                          <QrCode className="w-14 h-14 text-white/20 mx-auto" />
-                          <p className="text-xs text-white/50 font-medium">Kamera Siap. Silakan klik tombol <strong className="text-primary-fixed">"Simulasi Pindai"</strong> pada salah satu tiket di sebelah kanan untuk absensi.</p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Simulation reset button - QUICK RESCAN BUTTON (Requirement 10) */}
-                    {adminScannedTicket && (
-                      <button
-                        onClick={() => {
-                          setAdminScannedTicket(null);
-                          setAdminManualCode('');
-                          triggerNotification('Alat pemindai dikosongkan. Siap memindai tiket lain!');
-                        }}
-                        className="w-full bg-emerald-500 text-slate-950 font-black text-xs py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-emerald-400 cursor-pointer active:scale-98 transition-all shadow-md mt-4 relative z-10"
-                      >
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Pindai Tiket Lain (Scan Lagi Cepat)</span>
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Right side component: List of booked tickets in system */}
-                  <div className="lg:col-span-6 space-y-4">
-                    <div className="bg-surface-container rounded-2xl p-4 border border-outline-variant/60 space-y-3">
-                      <h3 className="text-xs font-black text-on-surface uppercase block">Pilih Tiket yang Akan Disimulasikan</h3>
-                      <p className="text-[11px] text-on-surface-variant leading-relaxed">
-                        Di bawah ini adalah {purchasedTickets.length} tiket virtual yang telah dibeli oleh pengunjung. Anda dapat menekan tombol <strong>Simulasi Pindai</strong> untuk memicu alat absensi di samping kiri.
-                      </p>
-                    </div>
-
-                    <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
-                      {purchasedTickets.length === 0 ? (
-                        <div className="text-center py-12 bg-surface-container-low border border-dashed border-outline-variant rounded-2xl text-xs space-y-2">
-                          <ShieldAlert className="w-8 h-8 text-on-surface-variant/40 mx-auto" />
-                          <p className="font-semibold text-on-surface-variant">Belum ada tiket yang lunas dibeli.</p>
-                          <p className="text-[10px] text-on-surface-variant max-w-xs mx-auto">Silakan menuju tab <button onClick={() => setActiveTab('explore')} className="text-primary font-bold underline">Jelajahi Acara</button> lalu pesan tiket untuk menyimulasikan absensi.</p>
-                        </div>
-                      ) : (
-                        purchasedTickets.map((t) => (
-                          <div
-                            key={t.id}
-                            className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 text-xs bg-surface ${
-                              t.isCheckedIn ? 'border-emerald-500/30 bg-emerald-50/5' : 'border-outline-variant'
-                            }`}
-                          >
-                            <div className="space-y-1 flex-1">
-                              <h4 className="font-extrabold text-xs text-on-surface line-clamp-1">{t.eventTitle}</h4>
-                              <div className="text-[10px] text-on-surface-variant font-mono flex flex-wrap gap-x-2">
-                                <span>KODE: <strong>{t.ticketCode}</strong></span>
-                                <span>• Atas Nama: <strong>{t.formResponses['name'] || 'Pemesan'}</strong></span>
-                                <span>• Kursi: <strong className="text-primary">{t.seatNumbers?.join(', ')}</strong></span>
-                              </div>
-                              <div className="pt-1 select-none flex items-center gap-2">
-                                <span className={`text-[9px] px-2 py-0.5 rounded font-black uppercase ${
-                                  t.isCheckedIn ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800 animate-pulse'
-                                }`}>
-                                  {t.isCheckedIn ? '✓ Sudah Hadir (Absen)' : '✗ Belum Hadir'}
-                                </span>
-                                {t.isCheckedIn && (
-                                  <span className="text-[10px] text-on-surface-variant italic flex items-center gap-1">
-                                    <Clock className="w-3 h-3" /> Pukul: {t.checkInTime}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-
-                            <button
-                              disabled={isAdminScanning}
-                              onClick={() => handleSimulateAdminScan(t)}
-                              className={`px-3 py-2 rounded-lg font-black text-[10px] uppercase cursor-pointer whitespace-nowrap transition-all ${
-                                t.isCheckedIn
-                                  ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
-                                  : 'bg-primary text-on-primary hover:opacity-90 active:scale-95'
-                              }`}
-                            >
-                              Simulasi Pindai
-                            </button>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-
+                {/* Sub-tab Navigation */}
+                <div className="flex border-b border-outline-variant/60 gap-4 text-xs font-bold pt-2 mb-6 text-left flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setAdminSubTab('events')}
+                    className={`pb-2.5 px-1 border-b-2 transition-all cursor-pointer ${
+                      adminSubTab === 'events' ? 'border-primary text-primary font-black' : 'border-transparent text-on-surface-variant hover:text-on-surface'
+                    }`}
+                  >
+                    📅 Kelola Event & Kursi
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdminSubTab('scanner')}
+                    className={`pb-2.5 px-1 border-b-2 transition-all cursor-pointer ${
+                      adminSubTab === 'scanner' ? 'border-primary text-primary font-black' : 'border-transparent text-on-surface-variant hover:text-on-surface'
+                    }`}
+                  >
+                    🎟️ Validasi QR & Absensi
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdminSubTab('config')}
+                    className={`pb-2.5 px-1 border-b-2 transition-all cursor-pointer ${
+                      adminSubTab === 'config' ? 'border-primary text-primary font-black' : 'border-transparent text-on-surface-variant hover:text-on-surface'
+                    }`}
+                  >
+                    ⚙️ Kustomisasi Halaman & Countdown
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdminSubTab('sandbox')}
+                    className={`pb-2.5 px-1 border-b-2 transition-all cursor-pointer ${
+                      adminSubTab === 'sandbox' ? 'border-primary text-primary font-black' : 'border-transparent text-on-surface-variant hover:text-on-surface'
+                    }`}
+                  >
+                    💻 REST API & Sandbox Hub
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdminSubTab('registrants')}
+                    className={`pb-2.5 px-1 border-b-2 transition-all cursor-pointer ${
+                      adminSubTab === 'registrants' ? 'border-primary text-primary font-black' : 'border-transparent text-on-surface-variant hover:text-on-surface'
+                    }`}
+                  >
+                    👥 Daftar Pendaftar & Ekspor
+                  </button>
                 </div>
 
-                {/* ROW 2: PENGATURAN LANDING PAGE & TIKET COUNTDOWN (Requirement: buat admin juga bisa mengatur tip atau cta nya pada landing page) */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-6 border-t border-outline-variant/60">
-                  
-                  {/* Left column: Landing Page Configurator */}
-                  <div className="lg:col-span-6 bg-surface-container-low rounded-3xl p-6 border border-outline-variant/80 space-y-6">
-                    <div className="flex items-center gap-2 border-b border-outline-variant/40 pb-3">
-                      <SlidersHorizontal className="w-5 h-5 text-primary" />
-                      <div>
-                        <h3 className="text-xs font-black uppercase text-on-surface">Kustomisasi CTA & Tips Landing Page</h3>
-                        <span className="text-[10px] text-on-surface-variant font-medium">Ubah headline promosi, kode diskon, dan tips pintar secara realtime</span>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-black uppercase text-on-surface-variant">Judul Promosi Utama (CTA Title)</label>
-                        <input
-                          type="text"
-                          value={landingConfig.ctaTitle}
-                          onChange={(e) => setLandingConfig(prev => ({ ...prev, ctaTitle: e.target.value }))}
-                          className="w-full text-xs font-semibold bg-surface border border-outline px-3.5 py-2.5 rounded-xl text-on-surface focus:border-primary outline-hidden"
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-black uppercase text-on-surface-variant">Subjudul / Deskripsi Promo</label>
-                        <textarea
-                          rows={2}
-                          value={landingConfig.ctaDescription}
-                          onChange={(e) => setLandingConfig(prev => ({ ...prev, ctaDescription: e.target.value }))}
-                          className="w-full text-xs font-semibold bg-surface border border-outline px-3.5 py-2 rounded-xl text-on-surface focus:border-primary outline-hidden"
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-black uppercase text-on-surface-variant">Tulisan Tombol (CTA Button)</label>
-                          <input
-                            type="text"
-                            value={landingConfig.ctaButtonText}
-                            onChange={(e) => setLandingConfig(prev => ({ ...prev, ctaButtonText: e.target.value }))}
-                            className="w-full text-xs font-bold bg-surface border border-outline px-3.5 py-2 rounded-xl text-on-surface focus:border-primary outline-hidden"
-                          />
+                {adminSubTab === 'events' && (
+                  <div className="space-y-6">
+                    {selectedManageSeatsEvent ? (
+                      /* VIEW 1: MANAJEMEN SEATING/KURSI EVENT */
+                      <div className="space-y-6 text-left">
+                        {/* Seating Manager Header */}
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-outline-variant/60 pb-4">
+                          <div className="space-y-1">
+                            <button
+                              onClick={() => {
+                                setSelectedManageSeatsEvent(null);
+                                setSelectedManageSeatsTier(null);
+                              }}
+                              className="text-xs text-primary font-bold hover:underline inline-flex items-center gap-1 cursor-pointer bg-transparent border-0"
+                            >
+                              ← Kembali ke Daftar Event
+                            </button>
+                            <h2 className="font-extrabold text-xl text-on-surface">
+                              Kelola Kursi & Kapasitas Penonton
+                            </h2>
+                            <p className="text-xs text-on-surface-variant">
+                              Acara: <strong className="text-on-surface">{selectedManageSeatsEvent.title}</strong> | Lokasi: {selectedManageSeatsEvent.location}
+                            </p>
+                          </div>
+                          <div className="flex gap-2 flex-wrap">
+                            {selectedManageSeatsEvent.tiers.map((t) => (
+                              <button
+                                key={t.id}
+                                onClick={() => setSelectedManageSeatsTier(t)}
+                                className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                                  (selectedManageSeatsTier?.id === t.id || (!selectedManageSeatsTier && selectedManageSeatsEvent.tiers[0]?.id === t.id))
+                                    ? 'bg-primary text-on-primary border-primary shadow-xs'
+                                    : 'bg-surface border-outline hover:bg-slate-50 text-on-surface-variant'
+                                }`}
+                              >
+                                {t.name} (Rp {t.price.toLocaleString('id-ID')})
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-black uppercase text-on-surface-variant">Kode Promo Aktif</label>
-                          <input
-                            type="text"
-                            value={landingConfig.promoCode}
-                            onChange={(e) => setLandingConfig(prev => ({ ...prev, promoCode: e.target.value }))}
-                            className="w-full text-xs font-mono font-extrabold bg-surface border border-outline px-3.5 py-2 rounded-xl text-primary focus:border-primary outline-hidden"
-                          />
-                        </div>
-                      </div>
 
-                      {/* Interactive Tips List Configurator */}
-                      <div className="space-y-3 pt-3 border-t border-outline-variant/40">
-                        <span className="text-[10px] font-black uppercase text-secondary tracking-wider block">Kelola Tips Pintar Beranda</span>
-                        <div className="space-y-2">
-                          {landingConfig.tips.map((tip, idx) => (
-                            <div key={idx} className="bg-surface border border-outline-variant/60 rounded-xl p-3 space-y-2">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[9px] bg-secondary-container text-secondary px-2 py-0.5 rounded font-black">TIP #{idx + 1}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                     const updatedTips = landingConfig.tips.filter((_, i) => i !== idx);
-                                     setLandingConfig(prev => ({ ...prev, tips: updatedTips }));
-                                     triggerNotification(`Tip #${idx + 1} berhasil dihapus.`);
-                                  }}
-                                  className="text-[10px] text-red-600 hover:underline font-extrabold cursor-pointer"
-                                >
-                                  Hapus
-                                </button>
+                        {/* Active Seating Layout Grid */}
+                        {(() => {
+                          const activeTier = selectedManageSeatsTier || selectedManageSeatsEvent.tiers[0];
+                          if (!activeTier) {
+                            return (
+                              <div className="text-center py-12 bg-surface-container rounded-2xl border border-dashed text-xs text-on-surface-variant">
+                                Belum ada kelas tiket pendaftaran untuk event ini.
                               </div>
-                              <textarea
-                                rows={1}
-                                value={tip}
-                                onChange={(e) => {
-                                  const copyTips = [...landingConfig.tips];
-                                  copyTips[idx] = e.target.value;
-                                  setLandingConfig(prev => ({ ...prev, tips: copyTips }));
-                                }}
-                                className="w-full text-xs font-semibold bg-transparent border-b border-dashed border-outline-variant outline-hidden focus:border-primary/50 text-wrap"
-                              />
+                            );
+                          }
+
+                          // Get prefix
+                          const getSeatPrefix = (tName: string) => {
+                            const clean = tName.toLowerCase();
+                            if (clean.includes('vip')) return 'VIP';
+                            if (clean.includes('reguler') || clean.includes('regular')) return 'REG';
+                            return tName.slice(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, '');
+                          };
+                          const prefix = getSeatPrefix(activeTier.name);
+
+                          // All tickets for this event and this tier
+                          const activeTierTickets = purchasedTickets.filter(
+                            (t) => t.eventId === selectedManageSeatsEvent.id && t.tierName === activeTier.name
+                          );
+
+                          // Create array of seat numbers from 1 to slotsAvailable (capacity)
+                          const totalSeats = activeTier.slotsAvailable;
+
+                          return (
+                            <div className="bg-surface-container rounded-3xl p-6 border border-outline-variant space-y-6">
+                              <div className="flex items-center justify-between border-b border-outline-variant/40 pb-3 flex-wrap gap-3">
+                                <div>
+                                  <h3 className="font-extrabold text-sm text-on-surface uppercase">Peta Denah Kursi: Kelas {activeTier.name}</h3>
+                                  <span className="text-[10px] text-on-surface-variant font-semibold">Total Kapasitas: {totalSeats} Kursi | Klik kursi untuk Memblokir atau Membebaskan</span>
+                                </div>
+                                <div className="flex items-center gap-3 text-[10px] font-bold">
+                                  <div className="flex items-center gap-1.5"><span className="w-3.5 h-3.5 rounded-sm bg-emerald-500 border border-emerald-600 block"></span> Tersedia</div>
+                                  <div className="flex items-center gap-1.5"><span className="w-3.5 h-3.5 rounded-sm bg-red-500 border border-red-600 block"></span> Booked (User)</div>
+                                  <div className="flex items-center gap-1.5"><span className="w-3.5 h-3.5 rounded-sm bg-slate-700 border border-slate-800 block"></span> Blocked (Admin)</div>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-12 gap-2 max-h-[480px] overflow-y-auto p-1.5 no-scrollbar">
+                                {Array.from({ length: totalSeats }, (_, idx) => {
+                                  const seatNum = idx + 1;
+                                  const seatCode = `${prefix}-${seatNum}`;
+                                  
+                                  // Check if booked or blocked
+                                  const booking = activeTierTickets.find(t => t.seatNumbers.includes(seatCode));
+                                  const isBlocked = booking?.userId === 'admin-blocked';
+                                  const isBooked = !!booking && !isBlocked;
+
+                                  let bgColor = "bg-emerald-500 hover:bg-emerald-600 text-white border-emerald-600";
+                                  let tooltipText = `Kursi ${seatCode} (Tersedia)`;
+
+                                  if (isBlocked) {
+                                    bgColor = "bg-slate-700 hover:bg-slate-800 text-slate-200 border-slate-800";
+                                    tooltipText = `Kursi ${seatCode} (Diblock oleh Admin)`;
+                                  } else if (isBooked) {
+                                    bgColor = "bg-red-500 text-white border-red-600 cursor-not-allowed";
+                                    const buyerName = booking.formResponses.name || booking.userEmail || "Pembeli";
+                                    tooltipText = `Kursi ${seatCode} (Booked: ${buyerName})`;
+                                  }
+
+                                  return (
+                                    <button
+                                      key={seatCode}
+                                      type="button"
+                                      title={tooltipText}
+                                      onClick={async () => {
+                                        if (isBooked) {
+                                          alert(`Kursi ini telah dipesan oleh pengguna: ${booking.formResponses.name || booking.userEmail} (${booking.ticketCode}). Pengubahan status diblokir.`);
+                                          return;
+                                        }
+
+                                        if (isBlocked && booking) {
+                                          // Unblock: delete document
+                                          if (window.confirm(`Apakah Anda yakin ingin membebaskan kembali kursi ${seatCode}?`)) {
+                                            try {
+                                              await deleteDoc(doc(db, 'tickets', booking.id));
+                                              triggerNotification(`Kursi ${seatCode} dibebaskan.`);
+                                            } catch (err) {
+                                              console.error("Failed to unblock seat", err);
+                                            }
+                                          }
+                                        } else {
+                                          // Block: create document
+                                          if (window.confirm(`Apakah Anda yakin ingin memblokir kursi ${seatCode} agar tidak bisa dibeli pengguna?`)) {
+                                            try {
+                                              const blockId = `block-${selectedManageSeatsEvent.id}-${seatCode}`;
+                                              await setDoc(doc(db, 'tickets', blockId), {
+                                                id: blockId,
+                                                eventId: selectedManageSeatsEvent.id,
+                                                eventTitle: selectedManageSeatsEvent.title,
+                                                eventLocation: selectedManageSeatsEvent.location,
+                                                dateMonth: selectedManageSeatsEvent.dateMonth,
+                                                dateDay: selectedManageSeatsEvent.dateDay,
+                                                dateFullString: selectedManageSeatsEvent.dateFullString,
+                                                imageUrl: selectedManageSeatsEvent.imageUrl,
+                                                tierName: activeTier.name,
+                                                quantity: 1,
+                                                pricePerTicket: 0,
+                                                totalAmount: 0,
+                                                bookingDate: new Date().toLocaleDateString('id-ID') + " " + new Date().toTimeString().slice(0, 5),
+                                                ticketCode: 'BLOCKED-BY-ADMIN',
+                                                registrationType: 'Admin Blocked',
+                                                userId: 'admin-blocked',
+                                                formResponses: { name: 'Blocked by Admin' },
+                                                seatNumbers: [seatCode],
+                                                isCheckedIn: false
+                                              });
+                                              triggerNotification(`Kursi ${seatCode} berhasil diblokir.`);
+                                            } catch (err) {
+                                              console.error("Failed to block seat", err);
+                                            }
+                                          }
+                                        }
+                                      }}
+                                      className={`aspect-square rounded-xl border text-[10px] font-black flex flex-col items-center justify-center transition-all cursor-pointer ${bgColor}`}
+                                    >
+                                      <span>{seatCode}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
                             </div>
-                          ))}
+                          );
+                        })()}
+                      </div>
+                    ) : (
+                      /* VIEW 2: LIST OF EVENTS FOR ADMIN MANAGEMENT */
+                      <div className="space-y-6 text-left">
+                        <div className="flex items-center justify-between border-b border-outline-variant/60 pb-3 flex-wrap gap-3">
+                          <div>
+                            <h2 className="font-extrabold text-lg text-on-surface">Daftar Acara & Kalender Aktif</h2>
+                            <p className="text-xs text-on-surface-variant leading-relaxed">
+                              Berikut adalah seluruh acara yang aktif di database. Anda dapat mengubah detail acara, menghapusnya, atau mengelola booking kursi.
+                            </p>
+                          </div>
                           <button
-                            type="button"
                             onClick={() => {
-                              setLandingConfig(prev => ({
-                                ...prev,
-                                tips: [...prev.tips, 'Masukkan saran/tip pendaftaran baru di sini...']
-                              }));
-                              triggerNotification('Mendaftarkan slot tips pintar baru!');
+                              setEventToEdit(null);
+                              setIsCreateModalOpen(true);
                             }}
-                            className="w-full border-2 border-dashed border-outline-variant hover:border-primary/40 py-2 rounded-xl text-[11px] font-bold text-on-surface-variant hover:text-primary flex items-center justify-center gap-1 cursor-pointer transition-all bg-white"
+                            className="bg-primary text-on-primary text-xs font-black px-5 py-2.5 rounded-full hover:opacity-95 transition-all cursor-pointer flex items-center gap-1 shadow-md border-0"
                           >
-                            <Plus className="w-3.5 h-3.5" />
-                            <span>Tambah Baris Tip Baru</span>
+                            <Plus className="w-4 h-4 text-white" />
+                            <span>Buat Event Baru</span>
                           </button>
                         </div>
-                      </div>
 
-                    </div>
+                        {events.length === 0 ? (
+                          <div className="text-center py-16 bg-surface-container rounded-3xl border border-dashed border-outline-variant space-y-3">
+                            <ShieldAlert className="w-12 h-12 text-on-surface-variant/40 mx-auto" />
+                            <p className="font-bold text-on-surface-variant text-sm">Belum ada acara aktif di database.</p>
+                            <p className="text-xs text-on-surface-variant max-w-xs mx-auto">Klik tombol di atas untuk membuat acara perdana Anda.</p>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {events.map((evt) => (
+                              <div key={evt.id} className="bg-surface-container border border-outline-variant rounded-2xl p-4 flex gap-4 items-start shadow-2xs relative">
+                                <img
+                                  src={evt.imageUrl}
+                                  alt={evt.title}
+                                  className="w-20 h-20 rounded-xl object-cover bg-slate-950 shrink-0 border border-outline-variant"
+                                />
+                                <div className="space-y-1.5 flex-grow min-w-0">
+                                  <div className="flex items-start justify-between gap-1">
+                                    <h4 className="font-extrabold text-xs text-on-surface leading-tight truncate">{evt.title}</h4>
+                                    <span className="text-[9px] bg-primary/10 text-primary font-black px-2 py-0.5 rounded border border-primary/20 shrink-0 uppercase">{evt.category}</span>
+                                  </div>
+                                  <p className="text-[10px] text-on-surface-variant font-bold leading-none">📍 {evt.location}</p>
+                                  <p className="text-[10px] text-on-surface-variant font-bold leading-none">📅 {evt.dateFullString}</p>
+                                  <p className="text-[10px] text-primary font-black">
+                                    🎫 {evt.tiers.length} Kelas | Harga: {(() => {
+                                      const prices = evt.tiers && evt.tiers.length > 0 ? evt.tiers.map(t => Number(t.price) || 0) : [];
+                                      const priceMin = evt.priceMin !== undefined ? Number(evt.priceMin) : (prices.length > 0 ? Math.min(...prices) : 0);
+                                      const priceMax = evt.priceMax !== undefined ? Number(evt.priceMax) : (prices.length > 0 ? Math.max(...prices) : 0);
+                                      if (priceMin === 0 && priceMax === 0) return 'Gratis';
+                                      if (priceMin === priceMax) return `Rp ${priceMin.toLocaleString('id-ID')}`;
+                                      return `Rp ${priceMin.toLocaleString('id-ID')} - Rp ${priceMax.toLocaleString('id-ID')}`;
+                                    })()}
+                                  </p>
+
+                                  <div className="flex gap-1.5 pt-2 flex-wrap">
+                                    <button
+                                      onClick={() => {
+                                        setEventToEdit(evt);
+                                        setIsCreateModalOpen(true);
+                                      }}
+                                      className="bg-surface border border-outline hover:bg-slate-50 text-[10px] font-bold px-3 py-1.5 rounded-lg cursor-pointer transition-all text-on-surface"
+                                    >
+                                      Ubah Detail
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setSelectedManageSeatsEvent(evt);
+                                        setSelectedManageSeatsTier(evt.tiers[0] || null);
+                                      }}
+                                      className="bg-primary/10 border border-primary/20 hover:bg-primary/20 text-[10px] font-extrabold px-3 py-1.5 rounded-lg cursor-pointer transition-all text-primary"
+                                    >
+                                      Kelola Kursi / Block
+                                    </button>
+                                    <button
+                                      onClick={async () => {
+                                        if (window.confirm(`Apakah Anda yakin ingin menghapus event "${evt.title}" secara permanen dari database? Semua penjualan tiket event ini juga akan ikut dinonaktifkan.`)) {
+                                          try {
+                                            await deleteDoc(doc(db, 'events', evt.id));
+                                            triggerNotification("Event berhasil dihapus.");
+                                          } catch (err) {
+                                            console.error("Failed to delete event", err);
+                                            triggerNotification("Gagal menghapus event.");
+                                          }
+                                        }
+                                      }}
+                                      className="border border-red-200 hover:bg-red-50 text-[10px] font-bold px-3 py-1.5 rounded-lg cursor-pointer transition-all text-red-600 ml-auto bg-transparent"
+                                    >
+                                      Hapus
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
+                )}
 
-                  {/* Right column: Countdown & Traffic Scheduler */}
-                  <div className="lg:col-span-6 bg-surface-container-low rounded-3xl p-6 border border-outline-variant/80 space-y-6">
-                    <div className="flex items-center gap-2 border-b border-outline-variant/40 pb-3">
-                      <Clock className="w-5 h-5 text-amber-600 animate-spin" style={{ animationDuration: '6s' }} />
-                      <div>
-                        <h3 className="text-xs font-black uppercase text-on-surface">Pendaftaran Countdown & Beban Traffic</h3>
-                        <span className="text-[10px] text-on-surface-variant font-medium">Uji simulasi hitung mundur pembukaan & antrean bandwidth</span>
-                      </div>
+                {adminSubTab === 'scanner' && (
+                  <div className="space-y-6">
+                    <div className="space-y-1 text-left">
+                      <h2 className="font-extrabold text-lg text-on-surface">Pintu Absensi & Validasi QR</h2>
+                      <p className="text-xs text-on-surface-variant leading-relaxed">
+                        Gunakan panel ini untuk mensimulasikan pemisalan kamera pemindai (scanner QR Code) pada pintu masuk pertunjukan atau stadion.
+                      </p>
                     </div>
+                    {/* Simulated Scanning Frame & Output Screen */}
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                      {/* Left component: Scanning Simulator View */}
+                      <div className="lg:col-span-6 bg-slate-900 text-white rounded-3xl p-6 border-4 border-slate-800 shadow-2xl space-y-6 relative overflow-hidden text-left">
+                        {/* Camera grid background effect */}
+                        <div className="absolute inset-0 bg-[radial-gradient(#ffffff08_1px,transparent_1px)] [background-size:16px_16px] pointer-events-none opacity-40" />
 
-                    <p className="text-[11px] text-on-surface-variant leading-relaxed font-semibold">
-                      Konfigurasikan pembukaan registrasi (buka sekarang or countdown) dan jumlah request aktif pendaftar. Jika beban request &gt; 30 user, sistem penghemat bandwidth secara otomatis memindahkan user ke ruang antrean interaktif di halaman pendaftaran.
-                    </p>
+                        <div className="flex items-center justify-between border-b border-white/10 pb-3 relative z-10">
+                          <span className="text-xs font-black tracking-widest text-emerald-400 flex items-center gap-1.5">
+                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
+                            SIMULATOR KAMERA SCANNER ACTIVE
+                          </span>
+                          <Camera className="w-5 h-5 text-slate-400" />
+                        </div>
 
-                    <div className="space-y-4">
-                      {events.map((evt) => {
-                        const hasLock = !!evt.registrationOpenTime && new Date(evt.registrationOpenTime).getTime() > Date.now();
-                        return (
-                          <div key={evt.id} className="bg-surface border border-outline-variant rounded-2xl p-4 space-y-3.5">
-                            <div className="flex justify-between items-start gap-2">
-                              <div>
-                                <h4 className="font-extrabold text-xs text-on-surface leading-tight line-clamp-1">{evt.title}</h4>
-                                <span className="text-[9px] text-on-surface-variant font-bold uppercase">{evt.category} • ID: {evt.id}</span>
-                              </div>
-                              <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${
-                                hasLock ? 'bg-amber-105 text-amber-800 animate-pulse border border-amber-300' : 'bg-emerald-100 text-emerald-800'
-                              }`}>
-                                {hasLock ? '🔒 Pendaftaran Terkunci' : '🔓 Terbuka / Lepas'}
-                              </span>
+                        {/* Camera display placeholder box */}
+                        <div className="relative aspect-video rounded-2xl bg-black border border-white/5 overflow-hidden flex flex-col items-center justify-center text-center">
+                          {isAdminScanning && (
+                            <div className="absolute inset-x-0 top-0 h-1 bg-emerald-500 shadow-[0_0_15px_#10b981] animate-[bounce_1.2s_infinite] z-20" />
+                          )}
+
+                          {isAdminScanning ? (
+                            <div className="space-y-3 z-10">
+                              <RefreshCw className="w-9 h-9 text-emerald-400 animate-spin mx-auto" />
+                              <p className="text-xs font-bold font-mono text-emerald-400">Membaca data kode QR...</p>
                             </div>
-
-                            {/* Change Traffic Visitors count */}
-                            <div className="bg-surface-container px-3 py-2.5 rounded-xl flex items-center justify-between text-xs">
-                              <div className="space-y-0.5">
-                                <span className="text-[10px] font-black text-on-surface-variant block">Simulasi Pengunjung Aktif:</span>
-                                <span className="text-[9px] text-emerald-700 font-extrabold leading-none block">
-                                  {evt.simulatedRequestsCount ?? 15} Request { (evt.simulatedRequestsCount ?? 15) > 30 ? '🔥 (Antrean Aktif)' : '• (Masuk Langsung)' }
-                                </span>
+                          ) : adminScannedTicket ? (
+                            <kbd className="space-y-3 text-emerald-400 z-10 px-4 py-2">
+                              <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto" />
+                              <h4 className="text-sm font-black uppercase text-white">Verifikasi Berhasil</h4>
+                              <div className="text-[10px] bg-emerald-950/80 p-2.5 rounded-lg border border-emerald-500/30 text-emerald-200 font-mono space-y-1 text-left">
+                                <div>KODE: {adminScannedTicket.ticketCode}</div>
+                                <div>NAMA: {adminScannedTicket.formResponses['name'] || 'Pemesan'}</div>
+                                <div>KELAS: {adminScannedTicket.tierName}</div>
+                                <div>KURSI: {adminScannedTicket.seatNumbers?.join(', ') || 'N/A'}</div>
                               </div>
-                              <div className="flex items-center gap-1.5 font-mono">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const currentR = evt.simulatedRequestsCount ?? 15;
-                                    const nextR = Math.max(0, currentR - 5);
-                                    setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, simulatedRequestsCount: nextR } : e));
-                                    triggerNotification(`Saran: Beban server diturunkan!");`);
-                                  }}
-                                  className="w-7 h-7 rounded-lg bg-white border border-outline hover:bg-slate-50 font-black text-xs cursor-pointer flex items-center justify-center active:scale-95"
-                                >
-                                  -
-                                </button>
-                                <span className="font-mono font-black w-6 text-center">{evt.simulatedRequestsCount ?? 15}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const currentR = evt.simulatedRequestsCount ?? 15;
-                                    const nextR = currentR + 10;
-                                    setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, simulatedRequestsCount: nextR } : e));
-                                    triggerNotification(`Saran: Beban pendaftar ditingkatkan!");`);
-                                  }}
-                                  className="w-7 h-7 rounded-lg bg-white border border-outline hover:bg-slate-50 font-black text-xs cursor-pointer flex items-center justify-center active:scale-95"
-                                >
-                                  +
-                                </button>
-                              </div>
+                            </kbd>
+                          ) : (
+                            <div className="space-y-2 z-10 px-6">
+                              <QrCode className="w-14 h-14 text-white/20 mx-auto" />
+                              <p className="text-xs text-white/50 font-medium">Kamera Siap. Silakan klik tombol <strong className="text-primary-fixed">"Simulasi Pindai"</strong> pada salah satu tiket di sebelah kanan untuk absensi.</p>
                             </div>
+                          )}
+                        </div>
 
-                            {/* Set Schedule Shortcuts */}
-                            <div className="space-y-2 text-xs">
-                              <span className="text-[10px] font-black uppercase text-on-surface-variant">Konfigurasi Pembukaan & Hitung Mundur:</span>
-                              <div className="grid grid-cols-2 gap-1.5 text-center text-[10px] font-bold">
+                        {!isAdminScanning && !adminScannedTicket && (
+                          <div className="space-y-2 mt-4 pt-4 border-t border-white/10 relative z-10 text-left">
+                            <label className="text-[10px] font-black uppercase text-slate-400">Verifikasi Manual Kode QR Tiket</label>
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                value={adminManualCode}
+                                onChange={(e) => setAdminManualCode(e.target.value.toUpperCase())}
+                                placeholder="CONTOH: SGX-123-ABCD"
+                                className="bg-slate-950 border border-white/10 text-white rounded-xl px-3 py-2 text-xs font-bold font-mono focus:border-emerald-500 focus:outline-none flex-grow"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const trimmed = adminManualCode.trim();
+                                  if (!trimmed) {
+                                    triggerNotification("Masukkan kode tiket terlebih dahulu!");
+                                    return;
+                                  }
+                                  const ticket = purchasedTickets.find(t => t.ticketCode === trimmed);
+                                  if (!ticket) {
+                                    triggerNotification(`Tiket dengan kode ${trimmed} tidak ditemukan!`);
+                                    return;
+                                  }
+                                  handleSimulateAdminScan(ticket);
+                                }}
+                                className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black px-4 py-2 rounded-xl cursor-pointer transition-all active:scale-95 border-0 shrink-0"
+                              >
+                                Verifikasi
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {adminScannedTicket && (
+                          <button
+                            onClick={() => {
+                              setAdminScannedTicket(null);
+                              setAdminManualCode('');
+                              triggerNotification('Alat pemindai dikosongkan. Siap memindai tiket lain!');
+                            }}
+                            className="w-full bg-emerald-500 text-slate-950 font-black text-xs py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-emerald-400 cursor-pointer active:scale-98 transition-all shadow-md mt-4 relative z-10"
+                          >
+                            <RefreshCw className="w-4 h-4 animate-spin" />
+                            <span>Pindai Tiket Lain (Scan Lagi Cepat)</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Right side component: List of booked tickets in system */}
+                      <div className="lg:col-span-6 space-y-4 text-left">
+                        <div className="bg-surface-container rounded-2xl p-4 border border-outline-variant/60 space-y-3">
+                          <h3 className="text-xs font-black text-on-surface uppercase block">Pilih Tiket yang Akan Disimulasikan</h3>
+                          <p className="text-[11px] text-on-surface-variant leading-relaxed">
+                            Di bawah ini adalah {purchasedTickets.length} tiket virtual yang telah dibeli oleh pengunjung. Anda dapat menekan tombol <strong>Simulasi Pindai</strong> untuk memicu alat absensi di samping kiri.
+                          </p>
+                        </div>
+
+                        <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                          {purchasedTickets.length === 0 ? (
+                            <div className="text-center py-12 bg-surface-container-low border border-dashed border-outline-variant rounded-2xl text-xs space-y-2">
+                              <ShieldAlert className="w-8 h-8 text-on-surface-variant/40 mx-auto" />
+                              <p className="font-semibold text-on-surface-variant">Belum ada tiket yang lunas dibeli.</p>
+                              <p className="text-[10px] text-on-surface-variant max-w-xs mx-auto">Silakan menuju tab <button onClick={() => setActiveTab('explore')} className="text-primary font-bold underline">Jelajahi Acara</button> lalu pesan tiket untuk menyimulasikan absensi.</p>
+                            </div>
+                          ) : (
+                            purchasedTickets.map((t) => (
+                              <div
+                                key={t.id}
+                                className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 text-xs bg-surface ${
+                                  t.isCheckedIn ? 'border-emerald-500/30 bg-emerald-50/5' : 'border-outline-variant'
+                                }`}
+                              >
+                                <div className="space-y-1 flex-1">
+                                  <h4 className="font-extrabold text-xs text-on-surface line-clamp-1">{t.eventTitle}</h4>
+                                  <div className="text-[10px] text-on-surface-variant font-mono flex flex-wrap gap-x-2">
+                                    <span>KODE: <strong>{t.ticketCode}</strong></span>
+                                    <span>• Atas Nama: <strong>{t.formResponses['name'] || 'Pemesan'}</strong></span>
+                                    <span>• Kursi: <strong className="text-primary">{t.seatNumbers?.join(', ')}</strong></span>
+                                  </div>
+                                  <div className="pt-1 select-none flex items-center gap-2">
+                                    <span className={`text-[9px] px-2 py-0.5 rounded font-black uppercase ${
+                                      t.isCheckedIn ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800 animate-pulse'
+                                    }`}>
+                                      {t.isCheckedIn ? '✓ Sudah Hadir (Absen)' : '✗ Belum Hadir'}
+                                    </span>
+                                    {t.isCheckedIn && (
+                                      <span className="text-[10px] text-on-surface-variant italic flex items-center gap-1">
+                                        <Clock className="w-3 h-3" /> Pukul: {t.checkInTime}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
                                 <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, registrationOpenTime: undefined } : e));
-                                    triggerNotification(`🔓 Pendaftaran ${evt.title} dinonaktifkan kuncinya!`);
-                                  }}
-                                  className={`py-2 px-1 rounded-lg border cursor-pointer transition-all ${
-                                    !evt.registrationOpenTime 
-                                      ? 'bg-primary text-on-primary border-primary font-black shadow-xs'
-                                      : 'bg-white text-on-surface-variant border-outline hover:bg-slate-50'
+                                  disabled={isAdminScanning}
+                                  onClick={() => handleSimulateAdminScan(t)}
+                                  className={`px-3 py-2 rounded-lg font-black text-[10px] uppercase cursor-pointer whitespace-nowrap transition-all ${
+                                    t.isCheckedIn
+                                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                                      : 'bg-primary text-on-primary hover:opacity-90 active:scale-95'
                                   }`}
                                 >
-                                  Buka Sekarang (Free)
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const futureDate = new Date(Date.now() + 30 * 1000).toISOString();
-                                    setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, registrationOpenTime: futureDate } : e));
-                                    triggerNotification(`⏳ Pendaftaran ${evt.title} diset countdown tinggal 30 detik!`);
-                                  }}
-                                  className="py-2 px-1 rounded-lg border bg-white border-outline hover:bg-slate-50 text-on-surface-variant cursor-pointer"
-                                >
-                                  Countdown 30 Detik
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const futureDate = new Date(Date.now() + 45 * 60 * 1000).toISOString();
-                                    setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, registrationOpenTime: futureDate } : e));
-                                    triggerNotification(`⏳ Pendaftaran ${evt.title} diset countdown tinggal 45 menit!`);
-                                  }}
-                                  className="py-2 px-1 rounded-lg border bg-white border-outline hover:bg-slate-50 text-on-surface-variant cursor-pointer"
-                                >
-                                  Countdown 45 Mnt
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const tomorrowDate = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
-                                    setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, registrationOpenTime: tomorrowDate } : e));
-                                    triggerNotification(`🔒 Acara ${evt.title} dikunci untuk dibuka besok.`);
-                                  }}
-                                  className="py-2 px-1 rounded-lg border bg-white border-outline hover:bg-slate-50 text-on-surface-variant cursor-pointer"
-                                >
-                                  Tutup (Buka Besok)
+                                  Simulasi Pindai
                                 </button>
                               </div>
-                            </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
+                {adminSubTab === 'config' && (
+                  <div className="space-y-6">
+                    <div className="space-y-1 text-left">
+                      <h2 className="font-extrabold text-lg text-on-surface">Kustomisasi Halaman & Countdown</h2>
+                      <p className="text-xs text-on-surface-variant leading-relaxed">
+                        Jadwalkan pembukaan registrasi acara atau atur banner promo dan tips pintar yang terpajang di beranda utama.
+                      </p>
+                    </div>
+                    {/* ROW 2: PENGATURAN LANDING PAGE & TIKET COUNTDOWN */}
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 text-left">
+                      {/* Left column: Landing Page Configurator */}
+                      <div className="lg:col-span-6 bg-surface-container-low rounded-3xl p-6 border border-outline-variant/80 space-y-6">
+                        <div className="flex items-center gap-2 border-b border-outline-variant/40 pb-3">
+                          <SlidersHorizontal className="w-5 h-5 text-primary" />
+                          <div>
+                            <h3 className="text-xs font-black uppercase text-on-surface">Kustomisasi CTA & Tips Landing Page</h3>
+                            <span className="text-[10px] text-on-surface-variant font-medium">Ubah headline promosi, kode diskon, dan tips pintar secara realtime</span>
                           </div>
-                        );
-                      })}
+                        </div>
+
+                        {/* Enable/Disable Section Toggles (Requirement 8) */}
+                        <div className="grid grid-cols-2 gap-4 bg-surface p-3.5 rounded-xl border border-outline-variant/50 text-[11px] font-bold text-on-surface-variant">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              id="toggle-cta-enabled"
+                              checked={activeLandingConfig.isCtaEnabled !== false}
+                              onChange={(e) => handleUpdateDraftLandingConfig(prev => ({ ...prev, isCtaEnabled: e.target.checked }))}
+                              className="w-4 h-4 text-primary border-outline rounded cursor-pointer"
+                            />
+                            <label htmlFor="toggle-cta-enabled" className="cursor-pointer select-none">Aktifkan Banner CTA</label>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              id="toggle-tips-enabled"
+                              checked={activeLandingConfig.isTipsEnabled !== false}
+                              onChange={(e) => handleUpdateDraftLandingConfig(prev => ({ ...prev, isTipsEnabled: e.target.checked }))}
+                              className="w-4 h-4 text-primary border-outline rounded cursor-pointer"
+                            />
+                            <label htmlFor="toggle-tips-enabled" className="cursor-pointer select-none">Aktifkan Tips Beranda</label>
+                          </div>
+                        </div>
+
+                        {/* Biaya Platform SAGATIX Configuration */}
+                        <div className="bg-surface p-4 rounded-xl border border-outline-variant/50 space-y-4 text-left">
+                          <span className="text-[10px] font-black uppercase text-secondary tracking-wider block">Pengaturan Biaya Platform (Layanan)</span>
+                          
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              id="toggle-fee-enabled"
+                              checked={activeLandingConfig.isPlatformFeeEnabled !== false}
+                              onChange={(e) => handleUpdateDraftLandingConfig(prev => ({ ...prev, isPlatformFeeEnabled: e.target.checked }))}
+                              className="w-4 h-4 text-primary border-outline rounded cursor-pointer"
+                            />
+                            <label htmlFor="toggle-fee-enabled" className="text-xs font-bold text-on-surface-variant cursor-pointer select-none">Aktifkan Biaya Layanan Platform</label>
+                          </div>
+                          
+                          {activeLandingConfig.isPlatformFeeEnabled !== false && (
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-black uppercase text-on-surface-variant">Persentase Biaya Layanan (%)</label>
+                              <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="0.5"
+                                value={activeLandingConfig.platformFeePercent ?? 5}
+                                onChange={(e) => {
+                                  const val = parseFloat(e.target.value);
+                                  handleUpdateDraftLandingConfig(prev => ({ ...prev, platformFeePercent: isNaN(val) ? 0 : val }));
+                                }}
+                                className="w-full text-xs font-bold bg-surface border border-outline px-3.5 py-2 rounded-xl text-on-surface focus:border-primary outline-hidden"
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="space-y-4">
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-black uppercase text-on-surface-variant">Judul Promosi Utama (CTA Title)</label>
+                            <input
+                              type="text"
+                              value={activeLandingConfig.ctaTitle}
+                              onChange={(e) => handleUpdateDraftLandingConfig(prev => ({ ...prev, ctaTitle: e.target.value }))}
+                              className="w-full text-xs font-semibold bg-surface border border-outline px-3.5 py-2.5 rounded-xl text-on-surface focus:border-primary outline-hidden"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-black uppercase text-on-surface-variant">Subjudul / Deskripsi Promo</label>
+                            <textarea
+                              rows={2}
+                              value={activeLandingConfig.ctaDescription}
+                              onChange={(e) => handleUpdateDraftLandingConfig(prev => ({ ...prev, ctaDescription: e.target.value }))}
+                              className="w-full text-xs font-semibold bg-surface border border-outline px-3.5 py-2 rounded-xl text-on-surface focus:border-primary outline-hidden"
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-black uppercase text-on-surface-variant">Tulisan Tombol (CTA Button)</label>
+                              <input
+                                type="text"
+                                value={activeLandingConfig.ctaButtonText}
+                                onChange={(e) => handleUpdateDraftLandingConfig(prev => ({ ...prev, ctaButtonText: e.target.value }))}
+                                className="w-full text-xs font-bold bg-surface border border-outline px-3.5 py-2 rounded-xl text-on-surface focus:border-primary outline-hidden"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-black uppercase text-on-surface-variant">Kode Promo Aktif</label>
+                              <input
+                                type="text"
+                                value={activeLandingConfig.promoCode}
+                                onChange={(e) => handleUpdateDraftLandingConfig(prev => ({ ...prev, promoCode: e.target.value }))}
+                                className="w-full text-xs font-mono font-extrabold bg-surface border border-outline px-3.5 py-2 rounded-xl text-primary focus:border-primary outline-hidden"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Link Direction configuration (Requirement 8 / New Requirement 3) */}
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black uppercase text-on-surface-variant block">Aksi Klik Tombol CTA</label>
+                            <select
+                              value={
+                                activeLandingConfig.ctaLink === '#explore-catalog' || !activeLandingConfig.ctaLink
+                                  ? 'explore'
+                                  : activeLandingConfig.ctaLink.startsWith('http')
+                                    ? 'external'
+                                    : 'event'
+                              }
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === 'explore') {
+                                  handleUpdateDraftLandingConfig(prev => ({ ...prev, ctaLink: '#explore-catalog' }));
+                                } else if (val === 'external') {
+                                  handleUpdateDraftLandingConfig(prev => ({ ...prev, ctaLink: 'https://' }));
+                                } else if (val === 'event') {
+                                  handleUpdateDraftLandingConfig(prev => ({ ...prev, ctaLink: events[0]?.id || '' }));
+                                }
+                              }}
+                              className="w-full text-xs font-bold bg-surface border border-outline px-3.5 py-2.5 rounded-xl text-on-surface focus:border-primary outline-hidden cursor-pointer"
+                            >
+                              <option value="explore">Scroll ke Katalog Event (#explore-catalog)</option>
+                              <option value="external">Tautan URL Luar (Link HTTP/HTTPS)</option>
+                              <option value="event">Buka Halaman Detail Event Tertentu</option>
+                            </select>
+
+                            {/* Show input or event dropdown based on selected type */}
+                            {(activeLandingConfig.ctaLink && !activeLandingConfig.ctaLink.startsWith('http') && activeLandingConfig.ctaLink !== '#explore-catalog') ? (
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-black uppercase text-on-surface-variant block">Pilih Event Tujuan</label>
+                                <select
+                                  value={activeLandingConfig.ctaLink}
+                                  onChange={(e) => handleUpdateDraftLandingConfig(prev => ({ ...prev, ctaLink: e.target.value }))}
+                                  className="w-full text-xs font-bold bg-surface border border-outline px-3.5 py-2.5 rounded-xl text-on-surface focus:border-primary outline-hidden cursor-pointer"
+                                >
+                                  {events.length === 0 ? (
+                                    <option value="">Belum ada event aktif</option>
+                                  ) : (
+                                    events.map(evt => (
+                                      <option key={evt.id} value={evt.id}>{evt.title}</option>
+                                    ))
+                                  )}
+                                </select>
+                              </div>
+                            ) : activeLandingConfig.ctaLink && activeLandingConfig.ctaLink.startsWith('http') ? (
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-black uppercase text-on-surface-variant block">Tautan Link URL Luar</label>
+                                <input
+                                  type="text"
+                                  placeholder="Contoh: https://example.com"
+                                  value={activeLandingConfig.ctaLink}
+                                  onChange={(e) => handleUpdateDraftLandingConfig(prev => ({ ...prev, ctaLink: e.target.value }))}
+                                  className="w-full text-xs font-semibold bg-surface border border-outline px-3.5 py-2.5 rounded-xl text-on-surface focus:border-primary outline-hidden"
+                                />
+                              </div>
+                            ) : null}
+                          </div>
+
+                          {/* Interactive Tips List Configurator */}
+                          <div className="space-y-3 pt-3 border-t border-outline-variant/40">
+                            <span className="text-[10px] font-black uppercase text-secondary tracking-wider block">Kelola Tips Pintar Beranda</span>
+                            <div className="space-y-2">
+                              {activeLandingConfig.tips.map((tip, idx) => (
+                                <div key={idx} className="bg-surface border border-outline-variant/60 rounded-xl p-3 space-y-2">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[9px] bg-secondary-container text-secondary px-2 py-0.5 rounded font-black">TIP #{idx + 1}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                         const updatedTips = activeLandingConfig.tips.filter((_, i) => i !== idx);
+                                         handleUpdateDraftLandingConfig(prev => ({ ...prev, tips: updatedTips }));
+                                         triggerNotification(`Tip #${idx + 1} berhasil dihapus dari draf.`);
+                                      }}
+                                      className="text-[10px] text-red-600 hover:underline font-extrabold cursor-pointer"
+                                    >
+                                      Hapus
+                                    </button>
+                                  </div>
+                                  <textarea
+                                    rows={1}
+                                    value={tip}
+                                    onChange={(e) => {
+                                      const copyTips = [...activeLandingConfig.tips];
+                                      copyTips[idx] = e.target.value;
+                                      handleUpdateDraftLandingConfig(prev => ({ ...prev, tips: copyTips }));
+                                    }}
+                                    className="w-full text-xs font-semibold bg-transparent border-b border-dashed border-outline-variant outline-hidden focus:border-primary/50 text-wrap"
+                                  />
+                                </div>
+                              ))}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleUpdateDraftLandingConfig(prev => ({
+                                    ...prev,
+                                    tips: [...prev.tips, 'Masukkan saran/tip pendaftaran baru di sini...']
+                                  }));
+                                  triggerNotification('Mendaftarkan slot tips pintar baru di draf!');
+                                }}
+                                className="w-full border-2 border-dashed border-outline-variant hover:border-primary/40 py-2 rounded-xl text-[11px] font-bold text-on-surface-variant hover:text-primary flex items-center justify-center gap-1 cursor-pointer transition-all bg-white"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>Tambah Baris Tip Baru</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Publish button with confirmation (Requirement 8) */}
+                          <div className="pt-4 border-t border-outline-variant/40">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (window.confirm("Apakah Anda yakin ingin mempublikasikan seluruh perubahan kustomisasi halaman ke database live? Pengguna akan langsung melihat perubahan ini.")) {
+                                  handlePublishLandingConfig(activeLandingConfig);
+                                  setDraftLandingConfig(null); // reset draft as it is now published
+                                }
+                              }}
+                              className="w-full bg-primary text-on-primary font-black py-3 rounded-xl hover:opacity-95 active:scale-95 transition-all text-xs flex items-center justify-center gap-2 cursor-pointer shadow-md"
+                            >
+                              <Sparkles className="w-4 h-4 text-white" />
+                              <span>Publikasikan Kustomisasi Halaman 🚀</span>
+                            </button>
+                          </div>
+
+                        </div>
+                      </div>
+
+                      {/* Right column: Countdown & Traffic Scheduler */}
+                      <div className="lg:col-span-6 bg-surface-container-low rounded-3xl p-6 border border-outline-variant/80 space-y-6">
+                        <div className="flex items-center gap-2 border-b border-outline-variant/40 pb-3">
+                          <Clock className="w-5 h-5 text-amber-600 animate-spin" style={{ animationDuration: '6s' }} />
+                          <div>
+                            <h3 className="text-xs font-black uppercase text-on-surface">Pendaftaran Countdown & Beban Traffic</h3>
+                            <span className="text-[10px] text-on-surface-variant font-medium">Uji simulasi hitung mundur pembukaan & antrean bandwidth</span>
+                          </div>
+                        </div>
+
+                        <p className="text-[11px] text-on-surface-variant leading-relaxed font-semibold">
+                          Konfigurasikan pembukaan registrasi (buka sekarang or countdown) dan jumlah request aktif pendaftar. Jika beban request &gt; 30 user, sistem penghemat bandwidth secara otomatis memindahkan user ke ruang antrean interaktif di halaman pendaftaran.
+                        </p>
+
+                        <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                          {events.length === 0 ? (
+                            <div className="text-center py-12 bg-surface border border-dashed border-outline-variant rounded-2xl text-xs space-y-2">
+                              <ShieldAlert className="w-8 h-8 text-on-surface-variant/40 mx-auto" />
+                              <p className="font-semibold text-on-surface-variant">Belum ada acara aktif di database.</p>
+                              <p className="text-[10px] text-on-surface-variant max-w-xs mx-auto">Silakan buat acara baru terlebih dahulu.</p>
+                            </div>
+                          ) : (
+                            events.map((evt) => {
+                              const hasLock = !!evt.registrationOpenTime && new Date(evt.registrationOpenTime).getTime() > Date.now();
+                              return (
+                                <div key={evt.id} className="bg-surface border border-outline-variant rounded-2xl p-4 space-y-3.5">
+                                  <div className="flex justify-between items-start gap-2">
+                                    <div>
+                                      <h4 className="font-extrabold text-xs text-on-surface leading-tight line-clamp-1">{evt.title}</h4>
+                                      <span className="text-[9px] text-on-surface-variant font-bold uppercase">{evt.category} • ID: {evt.id}</span>
+                                    </div>
+                                    <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${
+                                      hasLock ? 'bg-amber-105 text-amber-800 animate-pulse border border-amber-300' : 'bg-emerald-100 text-emerald-800'
+                                    }`}>
+                                      {hasLock ? '🔒 Pendaftaran Terkunci' : '🔓 Terbuka / Lepas'}
+                                    </span>
+                                  </div>
+
+                                  {/* Change Traffic Visitors count */}
+                                  <div className="bg-surface-container px-3 py-2.5 rounded-xl flex items-center justify-between text-xs">
+                                    <div className="space-y-0.5">
+                                      <span className="text-[10px] font-black text-on-surface-variant block">Simulasi Pengunjung Aktif:</span>
+                                      <span className="text-[9px] text-emerald-700 font-extrabold leading-none block">
+                                        {evt.simulatedRequestsCount ?? 15} Request { (evt.simulatedRequestsCount ?? 15) > 30 ? '🔥 (Antrean Aktif)' : '• (Masuk Langsung)' }
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 font-mono">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const currentR = evt.simulatedRequestsCount ?? 15;
+                                          const nextR = Math.max(0, currentR - 5);
+                                          setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, simulatedRequestsCount: nextR } : e));
+                                          triggerNotification(`Saran: Beban server diturunkan!`);
+                                        }}
+                                        className="w-7 h-7 rounded-lg bg-white border border-outline hover:bg-slate-50 font-black text-xs cursor-pointer flex items-center justify-center active:scale-95"
+                                      >
+                                        -
+                                      </button>
+                                      <span className="font-mono font-black w-6 text-center">{evt.simulatedRequestsCount ?? 15}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const currentR = evt.simulatedRequestsCount ?? 15;
+                                          const nextR = currentR + 10;
+                                          setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, simulatedRequestsCount: nextR } : e));
+                                          triggerNotification(`Saran: Beban pendaftar ditingkatkan!`);
+                                        }}
+                                        className="w-7 h-7 rounded-lg bg-white border border-outline hover:bg-slate-50 font-black text-xs cursor-pointer flex items-center justify-center active:scale-95"
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {/* Set Schedule Shortcuts */}
+                                  <div className="space-y-2 text-xs">
+                                    <span className="text-[10px] font-black uppercase text-on-surface-variant">Konfigurasi Pembukaan & Hitung Mundur:</span>
+                                    <div className="grid grid-cols-2 gap-1.5 text-center text-[10px] font-bold">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, registrationOpenTime: undefined } : e));
+                                          triggerNotification(`🔓 Pendaftaran ${evt.title} dinonaktifkan kuncinya!`);
+                                        }}
+                                        className={`py-2 px-1 rounded-lg border cursor-pointer transition-all ${
+                                          !evt.registrationOpenTime 
+                                            ? 'bg-primary text-on-primary border-primary font-black shadow-xs'
+                                            : 'bg-white text-on-surface-variant border-outline hover:bg-slate-50'
+                                        }`}
+                                      >
+                                        Buka Sekarang (Free)
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const futureDate = new Date(Date.now() + 30 * 1000).toISOString();
+                                          setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, registrationOpenTime: futureDate } : e));
+                                          triggerNotification(`⏳ Pendaftaran ${evt.title} diset countdown tinggal 30 detik!`);
+                                        }}
+                                        className="py-2 px-1 rounded-lg border bg-white border-outline hover:bg-slate-50 text-on-surface-variant cursor-pointer"
+                                      >
+                                        Countdown 30 Detik
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const futureDate = new Date(Date.now() + 45 * 60 * 1000).toISOString();
+                                          setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, registrationOpenTime: futureDate } : e));
+                                          triggerNotification(`⏳ Pendaftaran ${evt.title} diset countdown tinggal 45 menit!`);
+                                        }}
+                                        className="py-2 px-1 rounded-lg border bg-white border-outline hover:bg-slate-50 text-on-surface-variant cursor-pointer"
+                                      >
+                                        Countdown 45 Mnt
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const tomorrowDate = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+                                          setEvents(prev => prev.map(e => e.id === evt.id ? { ...e, registrationOpenTime: tomorrowDate } : e));
+                                          triggerNotification(`🔒 Acara ${evt.title} dikunci untuk dibuka besok.`);
+                                        }}
+                                        className="py-2 px-1 rounded-lg border bg-white border-outline hover:bg-slate-50 text-on-surface-variant cursor-pointer"
+                                      >
+                                        Tutup (Buka Besok)
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {adminSubTab === 'sandbox' && (
+                  <div className="space-y-6">
+                    <div className="space-y-1 text-left">
+                      <h2 className="font-extrabold text-lg text-on-surface">Pusat Uji Coba & REST API</h2>
+                      <p className="text-xs text-on-surface-variant leading-relaxed">
+                        Gunakan instrumen ini untuk menguji respon REST API dan menyimulasikan kegagalan pembayaran.
+                      </p>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                      {/* Left Column: Sandbox Switches & Actions */}
+                      <div className="lg:col-span-5 space-y-5 text-left">
+                        {/* Sandbox Mode Options Card */}
+                        <div className="bg-surface-container border border-outline-variant rounded-2xl p-5 space-y-4 shadow-2xs">
+                          <h3 className="text-sm font-extrabold text-on-surface uppercase flex items-center gap-1.5 border-b border-outline-variant/50 pb-2">
+                            <SlidersHorizontal className="w-4 h-4 text-primary" /> Pengaturan Simulasi
+                          </h3>
+
+                          {/* Payment Failure Simulation Toggle */}
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-bold text-on-surface-variant block">Simulasi Kegagalan Pembayaran</label>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsSandboxFailureMode(!isSandboxFailureMode);
+                                  triggerNotification(
+                                    !isSandboxFailureMode
+                                      ? "🚨 Simulasi Gagal Pembayaran Diaktifkan! checkout berikutnya akan gagal."
+                                      : "✅ Simulasi Gagal Pembayaran Dimatikan."
+                                  );
+                                }}
+                                className={`w-12 h-6 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-300 ${
+                                  isSandboxFailureMode ? 'bg-[#ef4444]' : 'bg-slate-300'
+                                }`}
+                              >
+                                <span className={`bg-white w-5 h-5 rounded-full shadow-md transform transition-transform duration-300 ${
+                                  isSandboxFailureMode ? 'translate-x-6' : 'translate-x-0'
+                                }`} />
+                              </button>
+                            </div>
+                            <p className="text-[10px] text-on-surface-variant leading-relaxed">
+                              Ketika aktif, proses pembayaran tiket akan direkayasa gagal (mensimulasikan penolakan bank atau interupsi API). Memungkinkan Anda menguji draf pendaftaran lokal yang tersimpan.
+                            </p>
+                          </div>
+
+                          {/* Traffic Load Simulation Toggle (New Requirement 6 & 7) */}
+                          <div className="space-y-2 border-t border-outline-variant/60 pt-3">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-bold text-on-surface-variant block">Simulasi Beban Traffic Tinggi</label>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsSandboxTrafficActive(!isSandboxTrafficActive);
+                                  triggerNotification(
+                                    !isSandboxTrafficActive
+                                      ? "🚨 Simulasi Beban Traffic Tinggi Diaktifkan! Pengguna akan masuk antrean."
+                                      : "✅ Simulasi Beban Traffic Tinggi Dimatikan."
+                                  );
+                                }}
+                                className={`w-12 h-6 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-300 ${
+                                  isSandboxTrafficActive ? 'bg-primary' : 'bg-slate-300'
+                                }`}
+                              >
+                                <span className={`bg-white w-5 h-5 rounded-full shadow-md transform transition-transform duration-300 ${
+                                  isSandboxTrafficActive ? 'translate-x-6' : 'translate-x-0'
+                                }`} />
+                              </button>
+                            </div>
+                            <p className="text-[10px] text-on-surface-variant leading-relaxed">
+                              Ketika aktif, sistem akan menyimulasikan lonjakan jumlah pemesan secara nyata. Hal ini menempatkan pengguna dalam antrean interaktif dengan visual hitung mundur jumlah orang di depannya.
+                            </p>
+                          </div>
+
+                          {/* Countdown Simulation Toggle (New Requirement 6) */}
+                          <div className="space-y-2 border-t border-outline-variant/60 pt-3">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-bold text-on-surface-variant block">Simulasi Kunci Countdown Pendaftaran</label>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsSandboxCountdownActive(!isSandboxCountdownActive);
+                                  triggerNotification(
+                                    !isSandboxCountdownActive
+                                      ? "⏳ Simulasi Kunci Countdown Diaktifkan! Pendaftaran terkunci dengan timer."
+                                      : "✅ Simulasi Kunci Countdown Dimatikan."
+                                  );
+                                }}
+                                className={`w-12 h-6 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-300 ${
+                                  isSandboxCountdownActive ? 'bg-amber-500' : 'bg-slate-300'
+                                }`}
+                              >
+                                <span className={`bg-white w-5 h-5 rounded-full shadow-md transform transition-transform duration-300 ${
+                                  isSandboxCountdownActive ? 'translate-x-6' : 'translate-x-0'
+                                }`} />
+                              </button>
+                            </div>
+                            <p className="text-[10px] text-on-surface-variant leading-relaxed">
+                              Ketika aktif, semua pendaftaran event baru akan dikunci dengan tampilan visual countdown (hitung mundur) status pendaftaran yang berdetak mundur.
+                            </p>
+                          </div>
+
+                          <div className="border-t border-outline-variant/60 pt-4 space-y-3">
+                            <h4 className="text-xs font-bold text-on-surface">Alat Suntik Data Cepat (Data Generator)</h4>
+                            <div className="grid grid-cols-1 gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (events.length === 0) {
+                                    triggerNotification("❌ Buat minimal 1 acara terlebih dahulu sebelum menyuntik tiket!");
+                                    return;
+                                  }
+                                  const randomEvent = events[Math.floor(Math.random() * events.length)];
+                                  const randomTier = randomEvent.tiers[Math.floor(Math.random() * randomEvent.tiers.length)];
+                                  const randomRole = randomEvent.registrationRoles?.[Math.floor(Math.random() * (randomEvent.registrationRoles?.length || 1))] || { name: 'Penonton' };
+                                  const mockCode = `SGX-${Math.floor(Math.random() * 900 + 100)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+                                  
+                                  const dummyTicket: PurchasedTicket = {
+                                    id: `ticket-${Date.now()}`,
+                                    eventId: randomEvent.id,
+                                    eventTitle: randomEvent.title,
+                                    eventLocation: randomEvent.location,
+                                    dateMonth: randomEvent.dateMonth,
+                                    dateDay: randomEvent.dateDay,
+                                    dateFullString: randomEvent.dateFullString,
+                                    imageUrl: randomEvent.imageUrl,
+                                    tierName: randomTier.name,
+                                    quantity: 1,
+                                    pricePerTicket: randomTier.price,
+                                    totalAmount: randomTier.price,
+                                    bookingDate: new Date().toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' }) + " 12:00",
+                                    ticketCode: mockCode,
+                                    registrationType: randomRole.name,
+                                    formResponses: {
+                                      name: "Akun Simulasi " + Math.floor(Math.random() * 90 + 10),
+                                      email: "sandbox@sagatix.io",
+                                      whatsapp: "089876543210"
+                                    },
+                                    ticketHolders: [],
+                                    seatNumbers: [`S-${Math.floor(Math.random() * 300) + 101}`],
+                                    isCheckedIn: false
+                                  };
+
+                                  setPurchasedTickets((prev) => [dummyTicket, ...prev]);
+                                  triggerNotification("✨ Tiket virtual sukses disuntikkan ke tab Tiket Saya!");
+                                }}
+                                className="w-full bg-[#10b981] hover:bg-[#059669] text-white text-xs py-2.5 px-3 rounded-lg font-bold flex items-center justify-center gap-2 cursor-pointer transition-all shadow-xs"
+                              >
+                                <Plus className="w-4 h-4" />
+                                Suntik 1 Tiket Sukses Instan
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPurchasedTickets([]);
+                                  triggerNotification("🧹 Seluruh riwayat pembelian sukses dibersihkan!");
+                                }}
+                                className="w-full bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs py-2 px-3 rounded-lg font-bold flex items-center justify-center gap-2 cursor-pointer transition-all border border-slate-300"
+                              >
+                                <RefreshCw className="w-4 h-4" />
+                                Kosongkan Riwayat Tiket
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Developer Credit Info Card */}
+                        <div className="bg-surface-container-low border border-outline-variant rounded-2xl p-4 text-xs space-y-2">
+                          <h4 className="font-bold text-on-surface flex items-center gap-1.5">
+                            <Sparkles className="w-4 h-4 text-primary" /> Informasi Lisensi & REST API
+                          </h4>
+                          <p className="text-on-surface-variant leading-relaxed text-[11px]">
+                            REST API ini aktif secara nyata pada port <span className="font-mono text-primary font-bold">3000</span> dengan file <span className="font-mono text-primary">server.ts</span>. Integrasi mendukung deployment Cloud Run yang di-host dalam reverse proxy Sagatix.
+                          </p>
+                          <p className="text-[10px] text-on-surface-variant font-mono text-left">
+                            Host Server: 0.0.0.0:3000<br />
+                            Database: Local JSON In-Memory
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Right Column: Interactive API Explorer */}
+                      <div className="lg:col-span-7 space-y-4 text-left">
+                        <div className="bg-surface-container border border-outline-variant rounded-2xl p-5 space-y-4 shadow-2xs">
+                          <div className="flex items-center justify-between border-b border-outline-variant/50 pb-2">
+                            <h3 className="text-sm font-extrabold text-on-surface uppercase flex items-center gap-1.5">
+                              <CreditCard className="w-4 h-4 text-emerald-600" /> Katalog Penjelajah REST API Live
+                            </h3>
+                            <span className="text-[9px] font-mono text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                              Active v1.0
+                            </span>
+                          </div>
+
+                          <p className="text-xs text-on-surface-variant leading-relaxed">
+                            Tekan tombol <strong className="text-primary">Uji Live</strong> pada salah satu API di bawah ini untuk melihat tanggapan real-time secara asinkron dari server Node/Express.
+                          </p>
+
+                          {/* API Endpoint Row Components */}
+                          <div className="space-y-2 max-h-80 overflow-y-auto pr-1 text-left">
+                            {[
+                              {
+                                method: "GET",
+                                path: "/api/events",
+                                desc: "Mengambil daftar ringkasan acara (event) aktif untuk menghemat beban jaringan.",
+                                action: async () => {
+                                  setApiTerminalLoading(true);
+                                  try {
+                                    const r = await fetch("/api/events");
+                                    const data = await r.json();
+                                    setApiTerminalOutput(JSON.stringify(data, null, 2));
+                                  } catch {
+                                    setApiTerminalOutput("// Gagal berkomunikasi dengan server backend.");
+                                  } finally {
+                                    setApiTerminalLoading(false);
+                                  }
+                                }
+                              },
+                              {
+                                method: "GET",
+                                path: "/api/events/:id",
+                                desc: "Mengambil detail lengkap satu acara (event) berdasarkan ID secara spesifik.",
+                                action: async () => {
+                                  setApiTerminalLoading(true);
+                                  try {
+                                    const r = await fetch("/api/events/evt-1");
+                                    const data = await r.json();
+                                    setApiTerminalOutput(JSON.stringify(data, null, 2));
+                                  } catch {
+                                    setApiTerminalOutput("// Gagal mengambil detail event.");
+                                  } finally {
+                                    setApiTerminalLoading(false);
+                                  }
+                                }
+                              },
+                              {
+                                method: "POST",
+                                path: "/api/events",
+                                desc: "Mengunggah / mempublikasikan acara baru kustom langsung ke dalam basis data.",
+                                action: async () => {
+                                  setApiTerminalLoading(true);
+                                  try {
+                                    const response = await fetch('/api/events', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({
+                                        title: "Turnamen E-Sports Sandbox " + Math.floor(Math.random() * 100),
+                                        category: "Game",
+                                        location: "Sangat Imersif Arena",
+                                        priceMin: 50000,
+                                        priceMax: 150000,
+                                        imageUrl: "https://images.unsplash.com/photo-1542751371-adc38448a05e",
+                                        dateMonth: "DES",
+                                        dateDay: "12",
+                                        dateFullString: "Sabtu, 12 Des 2026",
+                                        tiers: [{id: "t-1", name: "Tribun", price: 50000, slotsAvailable: 10}],
+                                        registrationRoles: [{ id: "r-1", name: "Pemain", isTeamType: false }]
+                                      })
+                                    });
+                                    const data = await response.json();
+                                    if (response.ok) {
+                                      setEvents(prev => [data, ...prev]);
+                                    }
+                                    setApiTerminalOutput(JSON.stringify(data, null, 2));
+                                  } catch {
+                                    setApiTerminalOutput("// Gangguan koneksi API.");
+                                  } finally {
+                                    setApiTerminalLoading(false);
+                                  }
+                                }
+                              },
+                              {
+                                method: "GET",
+                                path: "/api/tickets",
+                                desc: "Mengunduh laporan seluruh riwayat tiket yang lunas dibeli untuk pengawasan audit.",
+                                action: async () => {
+                                  setApiTerminalLoading(true);
+                                  try {
+                                    const r = await fetch("/api/tickets");
+                                    const data = await r.json();
+                                    setApiTerminalOutput(JSON.stringify(data, null, 2));
+                                  } catch {
+                                    setApiTerminalOutput("// Gangguan koneksi API.");
+                                  } finally {
+                                    setApiTerminalLoading(false);
+                                  }
+                                }
+                              },
+                              {
+                                method: "GET",
+                                path: "/api/stats",
+                                desc: "Menghitung metrik total omzet kotor, tiket sold, rincian checkin, dan KPI acara.",
+                                action: async () => {
+                                  setApiTerminalLoading(true);
+                                  try {
+                                    const totalRevenueSym = purchasedTickets.reduce((a, t) => a + t.totalAmount, 0);
+                                    const totalCheckinsSym = purchasedTickets.filter(t => t.isCheckedIn).length;
+                                    setApiTerminalOutput(JSON.stringify({
+                                      success: true,
+                                      totalBookings: purchasedTickets.length,
+                                      totalTicketsSold: purchasedTickets.reduce((a, t) => a + t.quantity, 0),
+                                      totalRevenue: totalRevenueSym,
+                                      totalCheckIns: totalCheckinsSym,
+                                      eventsCount: events.length,
+                                      disclaimer: "Sinkronisasi real-time instrumen React & Express Node active."
+                                    }, null, 2));
+                                  } catch {
+                                    setApiTerminalOutput("// Gagal mengambil statistik.");
+                                  } finally {
+                                    setApiTerminalLoading(false);
+                                  }
+                                }
+                              }
+                            ].map((api, idx) => (
+                              <div key={idx} className="p-3 bg-surface-container-highest border border-outline-variant/60 rounded-xl space-y-2 text-xs">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-1.5 font-mono">
+                                    <span className={`px-2 py-0.5 rounded font-black text-[10px] ${
+                                      api.method === 'GET' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-[#d97706]'
+                                    }`}>
+                                      {api.method}
+                                    </span>
+                                    <span className="font-extrabold text-on-surface">{api.path}</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={api.action}
+                                    disabled={apiTerminalLoading}
+                                    className="bg-primary text-on-primary font-bold text-[10px] px-3 py-1 rounded-md cursor-pointer transition-all"
+                                  >
+                                    {apiTerminalLoading ? "Memproses..." : "Uji Live ⚡"}
+                                  </button>
+                                </div>
+                                <p className="text-[11px] text-on-surface-variant">{api.desc}</p>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Mock Terminal Output Frame */}
+                          <div className="space-y-1.5 pt-1 text-left">
+                            <span className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest block font-mono">💻 Terminal Log Event & JSON Output:</span>
+                            <div className="bg-slate-950 text-emerald-400 font-mono text-[11px] p-4 rounded-xl border border-slate-800 min-h-[160px] max-h-[180px] overflow-auto shadow-inner whitespace-pre-wrap leading-relaxed relative">
+                              {apiTerminalLoading && (
+                                <div className="absolute inset-0 bg-slate-950/80 flex items-center justify-center text-xs text-white">
+                                  <span className="animate-spin text-emerald-400 border-2 border-emerald-400 border-t-transparent w-5 h-5 rounded-full mr-2" />
+                                  Memuat data API...
+                                </div>
+                              )}
+                              <code>{apiTerminalOutput}</code>
+                            </div>
+                          </div>
+
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {adminSubTab === 'registrants' && (
+                  <div className="space-y-6 text-left">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-outline-variant/60 pb-4">
+                      <div className="space-y-1">
+                        <h2 className="font-extrabold text-lg text-on-surface">Daftar Pendaftar & Ekspor CSV</h2>
+                        <p className="text-xs text-on-surface-variant">
+                          Melihat daftar seluruh transaksi pendaftaran, data kustom yang diisi, dan mengunduh laporan dalam format CSV.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const getFieldLabel = (fieldId: string, eventId: string): string => {
+                            const event = events.find(e => e.id === eventId);
+                            if (!event) return fieldId;
+                            if (event.registrationRoles) {
+                              for (const r of event.registrationRoles) {
+                                if (r.formSections) {
+                                  for (const s of r.formSections) {
+                                    if (s.fields) {
+                                      const f = s.fields.find(field => field.id === fieldId);
+                                      if (f) return f.label;
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                            if (event.formSections) {
+                              for (const s of event.formSections) {
+                                if (s.fields) {
+                                  const f = s.fields.find(field => field.id === fieldId);
+                                  if (f) return f.label;
+                                }
+                              }
+                            }
+                            if (event.customFormFields) {
+                              const f = event.customFormFields.find(field => field.id === fieldId);
+                              if (f) return f.label;
+                            }
+                            return fieldId;
+                          };
+
+                          if (purchasedTickets.length === 0) {
+                            triggerNotification("Belum ada data pendaftar untuk diekspor!");
+                            return;
+                          }
+                          
+                          // Header
+                          const headers = [
+                            'Kode Tiket',
+                            'Judul Event',
+                            'Nama Pendaftar Utama',
+                            'Kategori',
+                            'Kelas Tiket (Tier)',
+                            'Kuantitas',
+                            'Total Pembayaran',
+                            'Nomor Kursi',
+                            'Tanggal Booking',
+                            'Status Absensi',
+                            'Detail Jawaban Kustom'
+                          ];
+                          
+                          const rows = purchasedTickets.map(t => {
+                            const responses = t.formResponses || {};
+                            const attendeeName = responses['name'] || responses['name_lengkap'] || responses['nama'] || responses['nama_lengkap'] || responses['nama_kapten'] || 'PENGGUNA SAGATIX';
+                            
+                            const customDetails = Object.entries(responses)
+                              .map(([fid, val]) => `${getFieldLabel(fid, t.eventId)}: ${val}`)
+                              .join('; ');
+                              
+                            return [
+                              t.ticketCode,
+                              t.eventTitle,
+                              attendeeName,
+                              t.registrationType || 'N/A',
+                              t.tierName,
+                              t.quantity,
+                              t.totalAmount,
+                              (t.seatNumbers || []).join(', '),
+                              t.bookingDate,
+                              t.isCheckedIn ? 'Sudah Absen' : 'Belum Absen',
+                              customDetails
+                            ];
+                          });
+                          
+                          const csvContent = [
+                            headers.join(','),
+                            ...rows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
+                          ].join('\n');
+                          
+                          const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                          const url = URL.createObjectURL(blob);
+                          const link = document.createElement('a');
+                          link.setAttribute('href', url);
+                          link.setAttribute('download', `Daftar_Pendaftar_Sagatix_${new Date().toISOString().split('T')[0]}.csv`);
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                          triggerNotification("Laporan CSV berhasil diunduh!");
+                        }}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-xs active:scale-95 shrink-0"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>Ekspor ke CSV</span>
+                      </button>
                     </div>
 
+                    {/* Search & Filter Bar */}
+                    <div className="relative max-w-md">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant" />
+                      <input
+                        type="text"
+                        placeholder="Cari kode tiket, nama pendaftar, atau judul event..."
+                        value={registrantSearchQuery}
+                        onChange={(e) => setRegistrantSearchQuery(e.target.value)}
+                        className="w-full text-xs font-semibold bg-surface-container border border-outline-variant pl-9 pr-4 py-2.5 rounded-xl text-on-surface focus:border-primary outline-hidden"
+                      />
+                    </div>
+
+                    {/* Table View */}
+                    <div className="bg-surface-container rounded-3xl border border-outline-variant/80 overflow-hidden shadow-xs">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs text-left border-collapse">
+                          <thead>
+                            <tr className="bg-surface-container-high border-b border-outline-variant text-[10px] font-black uppercase text-on-surface-variant tracking-wider">
+                              <th className="px-4 py-3.5">Kode Tiket</th>
+                              <th className="px-4 py-3.5">Event</th>
+                              <th className="px-4 py-3.5">Nama Pendaftar</th>
+                              <th className="px-4 py-3.5">Kategori & Kelas</th>
+                              <th className="px-4 py-3.5">Kursi</th>
+                              <th className="px-4 py-3.5">Total Bayar</th>
+                              <th className="px-4 py-3.5">Tanggal</th>
+                              <th className="px-4 py-3.5">Absensi</th>
+                              <th className="px-4 py-3.5">Detail Kustom</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-outline-variant/55">
+                            {(() => {
+                              const getFieldLabel = (fieldId: string, eventId: string): string => {
+                                const event = events.find(e => e.id === eventId);
+                                if (!event) return fieldId;
+                                if (event.registrationRoles) {
+                                  for (const r of event.registrationRoles) {
+                                    if (r.formSections) {
+                                      for (const s of r.formSections) {
+                                        if (s.fields) {
+                                          const f = s.fields.find(field => field.id === fieldId);
+                                          if (f) return f.label;
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                                if (event.formSections) {
+                                  for (const s of event.formSections) {
+                                    if (s.fields) {
+                                      const f = s.fields.find(field => field.id === fieldId);
+                                      if (f) return f.label;
+                                    }
+                                  }
+                                }
+                                if (event.customFormFields) {
+                                  const f = event.customFormFields.find(field => field.id === fieldId);
+                                  if (f) return f.label;
+                                }
+                                return fieldId;
+                              };
+
+                              const filtered = purchasedTickets.filter(t => {
+                                const responses = t.formResponses || {};
+                                const attendeeName = responses['name'] || responses['name_lengkap'] || responses['nama'] || responses['nama_lengkap'] || responses['nama_kapten'] || '';
+                                const matchStr = `${t.ticketCode} ${t.eventTitle} ${attendeeName} ${t.registrationType} ${t.tierName}`.toLowerCase();
+                                return matchStr.includes(registrantSearchQuery.toLowerCase());
+                              });
+
+                              if (filtered.length === 0) {
+                                return (
+                                  <tr>
+                                    <td colSpan={9} className="px-4 py-8 text-center text-on-surface-variant italic font-semibold">
+                                      Tidak ada data pendaftaran yang sesuai dengan pencarian.
+                                    </td>
+                                  </tr>
+                                );
+                              }
+
+                              return filtered.map((t) => {
+                                const responses = t.formResponses || {};
+                                const attendeeName = responses['name'] || responses['name_lengkap'] || responses['nama'] || responses['nama_lengkap'] || responses['nama_kapten'] || 'PENGGUNA SAGATIX';
+                                return (
+                                  <tr key={t.id} className="hover:bg-surface-container-high transition-colors">
+                                    <td className="px-4 py-3 font-mono font-black text-primary">{t.ticketCode}</td>
+                                    <td className="px-4 py-3 font-extrabold max-w-[150px] truncate">{t.eventTitle}</td>
+                                    <td className="px-4 py-3 font-bold text-on-surface">{attendeeName}</td>
+                                    <td className="px-4 py-3 space-y-0.5">
+                                      <div className="font-semibold text-on-surface">{t.registrationType || 'N/A'}</div>
+                                      <div className="text-[10px] text-on-surface-variant font-medium">{t.tierName} ({t.quantity} Slot)</div>
+                                    </td>
+                                    <td className="px-4 py-3 font-bold text-emerald-600">{t.seatNumbers?.join(', ') || '-'}</td>
+                                    <td className="px-4 py-3 font-black text-on-surface">
+                                      {new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(t.totalAmount)}
+                                    </td>
+                                    <td className="px-4 py-3 text-[10px] font-medium text-on-surface-variant">{t.bookingDate.split('T')[0]}</td>
+                                    <td className="px-4 py-3">
+                                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${
+                                        t.isCheckedIn
+                                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300'
+                                          : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+                                      }`}>
+                                        {t.isCheckedIn ? 'Sudah Absen' : 'Belum Absen'}
+                                      </span>
+                                    </td>
+                                    <td className="px-4 py-3 max-w-[200px]">
+                                      <div className="text-[10px] text-on-surface-variant space-y-0.5 max-h-16 overflow-y-auto no-scrollbar">
+                                        {Object.entries(responses).map(([fid, val]) => (
+                                          <div key={fid} className="truncate">
+                                            <strong className="font-bold text-[9px]">{getFieldLabel(fid, t.eventId)}:</strong> <span className="font-semibold">{val}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              });
+                            })()}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
                   </div>
-
-                </div>
-
+                )}
               </motion.div>
             )}
 
@@ -1566,301 +2775,6 @@ export default function App() {
                   >
                     Ajukan Tiket Bantuan
                   </button>
-                </div>
-              </motion.div>
-            )}
-
-            {/* TAB RENDERING: DEVELOPER SANDBOX HUB (Requirement 3 & 5) */}
-            {activeTab === 'sandbox' && !selectedDetailsEvent && (
-              <motion.div
-                key="sandbox-tab"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                className="max-w-6xl mx-auto space-y-6 text-left"
-              >
-                {/* Header Title */}
-                <div className="space-y-2 border-b border-outline-variant/60 pb-4">
-                  <div className="inline-flex items-center gap-1.5 text-[10px] font-black tracking-widest text-[#059669] bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/20">
-                    🚀 KOTAK PASIR PENGEMBANG (SANDBOX HUB)
-                  </div>
-                  <h1 className="font-extrabold text-2xl md:text-3xl text-on-surface">Pusat Uji Coba & REST API</h1>
-                  <p className="text-sm text-on-surface-variant max-w-3xl">
-                    Gunakan panel instrumen ini untuk menyimulasikan berbagai kegagalan pembayaran, menyuntikkan tiket pendaftaran tiruan secara instan, mengosongkan riwayat sistem, dan mengevaluasi respon server REST API secara interaktif.
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                  {/* Left Column: Sandbox Switches & Actions */}
-                  <div className="lg:col-span-5 space-y-5">
-                    {/* Sandbox Mode Options Card */}
-                    <div className="bg-surface-container border border-outline-variant rounded-2xl p-5 space-y-4 shadow-2xs">
-                      <h3 className="text-sm font-extrabold text-on-surface uppercase flex items-center gap-1.5 border-b border-outline-variant/50 pb-2">
-                        <SlidersHorizontal className="w-4 h-4 text-primary" /> Pengaturan Simulasi
-                      </h3>
-
-                      {/* Payment Failure Simulation Toggle */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-bold text-on-surface-variant block">Simulasi Kegagalan Pembayaran</label>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsSandboxFailureMode(!isSandboxFailureMode);
-                              triggerNotification(
-                                !isSandboxFailureMode
-                                  ? "🚨 Simulasi Gagal Pembayaran Diaktifkan! checkout berikutnya akan gagal."
-                                  : "✅ Simulasi Gagal Pembayaran Dimatikan."
-                              );
-                            }}
-                            className={`w-12 h-6 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-300 ${
-                              isSandboxFailureMode ? 'bg-[#ef4444]' : 'bg-slate-300'
-                            }`}
-                          >
-                            <span className={`bg-white w-5 h-5 rounded-full shadow-md transform transition-transform duration-300 ${
-                              isSandboxFailureMode ? 'translate-x-6' : 'translate-x-0'
-                            }`} />
-                          </button>
-                        </div>
-                        <p className="text-[10px] text-on-surface-variant leading-relaxed">
-                          Ketika aktif, proses pembayaran tiket akan direkayasa gagal (mensimulasikan penolakan bank atau interupsi API). Memungkinkan Anda menguji draf pendaftaran lokal yang tersimpan.
-                        </p>
-                      </div>
-
-                      <div className="border-t border-outline-variant/60 pt-4 space-y-3">
-                        <h4 className="text-xs font-bold text-on-surface">Alat Suntik Data Cepat (Data Generator)</h4>
-                        <div className="grid grid-cols-1 gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              // Inject random ticket helper function
-                              const randomEvent = events[Math.floor(Math.random() * events.length)];
-                              const randomTier = randomEvent.tiers[Math.floor(Math.random() * randomEvent.tiers.length)];
-                              const randomRole = randomEvent.registrationRoles[Math.floor(Math.random() * randomEvent.registrationRoles.length)];
-                              const mockCode = `SGX-${Math.floor(Math.random() * 900 + 100)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-                              
-                              const dummyTicket: PurchasedTicket = {
-                                id: `ticket-${Date.now()}`,
-                                eventId: randomEvent.id,
-                                eventTitle: randomEvent.title,
-                                eventLocation: randomEvent.location,
-                                dateMonth: randomEvent.dateMonth,
-                                dateDay: randomEvent.dateDay,
-                                dateFullString: randomEvent.dateFullString,
-                                imageUrl: randomEvent.imageUrl,
-                                tierName: randomTier.name,
-                                quantity: 1,
-                                pricePerTicket: randomTier.price,
-                                totalAmount: randomTier.price,
-                                bookingDate: new Date().toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' }) + " 12:00",
-                                ticketCode: mockCode,
-                                registrationType: randomRole.name,
-                                formResponses: {
-                                  name: "Akun Simulasi " + Math.floor(Math.random() * 90 + 10),
-                                  email: "sandbox@sagatix.io",
-                                  whatsapp: "089876543210"
-                                },
-                                ticketHolders: [],
-                                seatNumbers: [`S-${Math.floor(Math.random() * 300) + 101}`],
-                                isCheckedIn: false
-                              };
-
-                              setPurchasedTickets((prev) => [dummyTicket, ...prev]);
-                              triggerNotification("✨ Tiket virtual sukses disuntikkan ke tab Tiket Saya!");
-                            }}
-                            className="w-full bg-[#10b981] hover:bg-[#059669] text-white text-xs py-2.5 px-3 rounded-lg font-bold flex items-center justify-center gap-2 cursor-pointer transition-all shadow-xs"
-                          >
-                            <Plus className="w-4 h-4" />
-                            Suntik 1 Tiket Sukses Instan
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPurchasedTickets([]);
-                              triggerNotification("🧹 Seluruh riwayat pembelian sukses dibersihkan!");
-                            }}
-                            className="w-full bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs py-2 px-3 rounded-lg font-bold flex items-center justify-center gap-2 cursor-pointer transition-all border border-slate-300"
-                          >
-                            <RefreshCw className="w-4 h-4" />
-                            Kosongkan Riwayat Tiket
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Developer Credit Info Card */}
-                    <div className="bg-surface-container-low border border-outline-variant rounded-2xl p-4 text-xs space-y-2">
-                      <h4 className="font-bold text-on-surface flex items-center gap-1.5">
-                        <Sparkles className="w-4 h-4 text-primary" /> Informasi Lisensi & REST API
-                      </h4>
-                      <p className="text-on-surface-variant leading-relaxed">
-                        REST API ini aktif secara nyata pada port <span className="font-mono text-primary font-bold">3000</span> dengan file <span className="font-mono text-primary">server.ts</span>. Integrasi mendukung deployment Cloud Run yang di-host dalam reverse proxy Sagatix.
-                      </p>
-                      <p className="text-[10px] text-on-surface-variant font-mono text-left">
-                        Host Server: 0.0.0.0:3000<br />
-                        Database: Local JSON In-Memory
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Right Column: Interactive API Explorer */}
-                  <div className="lg:col-span-7 space-y-4">
-                    <div className="bg-surface-container border border-outline-variant rounded-2xl p-5 space-y-4 shadow-2xs">
-                      <div className="flex items-center justify-between border-b border-outline-variant/50 pb-2">
-                        <h3 className="text-sm font-extrabold text-on-surface uppercase flex items-center gap-1.5">
-                          <CreditCard className="w-4 h-4 text-emerald-600" /> Katalog Penjelajah REST API Live
-                        </h3>
-                        <span className="text-[9px] font-mono text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                          Active v1.0
-                        </span>
-                      </div>
-
-                      <p className="text-xs text-on-surface-variant leading-relaxed">
-                        Tekan tombol <strong className="text-primary">Uji Live</strong> pada salah satu API di bawah ini untuk melihat tanggapan real-time secara asinkron dari server Node/Express.
-                      </p>
-
-                      {/* API Endpoint Row Components */}
-                      <div className="space-y-2 max-h-80 overflow-y-auto pr-1 text-left">
-                        {[
-                          {
-                            method: "GET",
-                            path: "/api/events",
-                            desc: "Mengambil daftar acara (event) aktif yang terpublikasi di platform.",
-                            action: async () => {
-                              setApiTerminalLoading(true);
-                              try {
-                                const r = await fetch("/api/events");
-                                const data = await r.json();
-                                setApiTerminalOutput(JSON.stringify(data, null, 2));
-                              } catch {
-                                setApiTerminalOutput("// Gagal berkomunikasi dengan server backend.\n// Skenario 1: Server development mati.\n// Skenario 2: Berjalan dalam platform statis.");
-                              } finally {
-                                setApiTerminalLoading(false);
-                              }
-                            }
-                          },
-                          {
-                            method: "POST",
-                            path: "/api/events",
-                            desc: "Mengunggah / mempublikasikan acara baru kustom langsung ke dalam basis data.",
-                            action: async () => {
-                              setApiTerminalLoading(true);
-                              try {
-                                const response = await fetch('/api/events', {
-                                  method: 'POST',
-                                  headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({
-                                    title: "Turnamen E-Sports Sandbox " + Math.floor(Math.random() * 100),
-                                    category: "Game",
-                                    location: "Sangat Imersif Arena",
-                                    priceMin: 50000,
-                                    priceMax: 150000,
-                                    imageUrl: "https://images.unsplash.com/photo-1542751371-adc38448a05e",
-                                    dateMonth: "DES",
-                                    dateDay: "12",
-                                    dateFullString: "Sabtu, 12 Des 2026",
-                                    tiers: [{id: "t-1", name: "Tribun", price: 50000, slotsAvailable: 10}],
-                                    registrationRoles: [{ id: "r-1", name: "Pemain", isTeamType: false }]
-                                  })
-                                });
-                                const data = await response.json();
-                                if (response.ok) {
-                                  // Update events array in react UI to match!
-                                  setEvents(prev => [data, ...prev]);
-                                }
-                                setApiTerminalOutput(JSON.stringify(data, null, 2));
-                              } catch {
-                                setApiTerminalOutput("// Gangguan koneksi API.");
-                              } finally {
-                                setApiTerminalLoading(false);
-                              }
-                            }
-                          },
-                          {
-                            method: "GET",
-                            path: "/api/tickets",
-                            desc: "Mengunduh laporan seluruh riwayat tiket yang lunas dibeli untuk pengawasan audit.",
-                            action: async () => {
-                              setApiTerminalLoading(true);
-                              try {
-                                const r = await fetch("/api/tickets");
-                                const data = await r.json();
-                                setApiTerminalOutput(JSON.stringify(data, null, 2));
-                              } catch {
-                                setApiTerminalOutput("// Gangguan koneksi API.");
-                              } finally {
-                                setApiTerminalLoading(false);
-                              }
-                            }
-                          },
-                          {
-                            method: "GET",
-                            path: "/api/stats",
-                            desc: "Menghitung metrik total omzet kotor, tiket sold, rincian checkin, dan KPI acara.",
-                            action: async () => {
-                              setApiTerminalLoading(true);
-                              try {
-                                // Simulate from actual client states
-                                const totalRevenueSym = purchasedTickets.reduce((a, t) => a + t.totalAmount, 0);
-                                const totalCheckinsSym = purchasedTickets.filter(t => t.isCheckedIn).length;
-                                setApiTerminalOutput(JSON.stringify({
-                                  success: true,
-                                  totalBookings: purchasedTickets.length,
-                                  totalTicketsSold: purchasedTickets.reduce((a, t) => a + t.quantity, 0),
-                                  totalRevenue: totalRevenueSym,
-                                  totalCheckIns: totalCheckinsSym,
-                                  eventsCount: events.length,
-                                  disclaimer: "Sinkronisasi real-time instrumen React & Express Node active."
-                                }, null, 2));
-                              } catch {
-                                setApiTerminalOutput("// Gagal mengambil statistik.");
-                              } finally {
-                                setApiTerminalLoading(false);
-                              }
-                            }
-                          }
-                        ].map((api, idx) => (
-                          <div key={idx} className="p-3 bg-surface-container-highest border border-outline-variant/60 rounded-xl space-y-2 text-xs">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-1.5 font-mono">
-                                <span className={`px-2 py-0.5 rounded font-black text-[10px] ${
-                                  api.method === 'GET' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-[#d97706]'
-                                }`}>
-                                  {api.method}
-                                </span>
-                                <span className="font-extrabold text-on-surface">{api.path}</span>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={api.action}
-                                disabled={apiTerminalLoading}
-                                className="bg-primary text-on-primary font-bold text-[10px] px-3 py-1 rounded-md cursor-pointer transition-all"
-                              >
-                                {apiTerminalLoading ? "Memproses..." : "Uji Live ⚡"}
-                              </button>
-                            </div>
-                            <p className="text-[11px] text-on-surface-variant">{api.desc}</p>
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Mock Terminal Output Frame */}
-                      <div className="space-y-1.5 pt-1 text-left">
-                        <span className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest block font-mono">💻 Terminal Log Event & JSON Output:</span>
-                        <div className="bg-slate-950 text-emerald-400 font-mono text-[11px] p-4 rounded-xl border border-slate-800 min-h-[160px] max-h-[180px] overflow-auto shadow-inner whitespace-pre-wrap leading-relaxed relative">
-                          {apiTerminalLoading && (
-                            <div className="absolute inset-0 bg-slate-950/80 flex items-center justify-center text-xs text-white">
-                              <span className="animate-spin text-emerald-400 border-2 border-emerald-400 border-t-transparent w-5 h-5 rounded-full mr-2" />
-                              Memuat data API...
-                            </div>
-                          )}
-                          <code>{apiTerminalOutput}</code>
-                        </div>
-                      </div>
-
-                    </div>
-                  </div>
                 </div>
               </motion.div>
             )}
@@ -1972,23 +2886,8 @@ export default function App() {
               activeTab === 'admin' ? 'text-primary font-black scale-102' : 'text-on-surface-variant'
             }`}
           >
-            <QrCode className="w-5 h-5 mx-auto" />
-            <span className="text-[10px] font-extrabold leading-none">Absensi</span>
-          </button>
-        )}
- 
-        {currentUser?.role === 'admin' && (
-          <button
-            onClick={() => {
-              setSelectedDetailsEvent(null);
-              setActiveTab('sandbox');
-            }}
-            className={`flex flex-col items-center gap-0.5 cursor-pointer py-1 flex-1 ${
-              activeTab === 'sandbox' ? 'text-primary font-black scale-102' : 'text-on-surface-variant'
-            }`}
-          >
             <SlidersHorizontal className="w-5 h-5 mx-auto" />
-            <span className="text-[10px] font-extrabold leading-none">Simulasi</span>
+            <span className="text-[10px] font-extrabold leading-none">Admin</span>
           </button>
         )}
 
@@ -2012,7 +2911,11 @@ export default function App() {
         {/* Modal Pembuatan Acara Baru */}
         {isCreateModalOpen && (
           <CreateEventModal
-            onClose={() => setIsCreateModalOpen(false)}
+            eventData={eventToEdit || undefined}
+            onClose={() => {
+              setIsCreateModalOpen(false);
+              setEventToEdit(null);
+            }}
             onSaveEvent={handleSaveEvent}
           />
         )}

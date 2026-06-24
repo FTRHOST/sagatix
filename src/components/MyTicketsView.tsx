@@ -1,13 +1,49 @@
 import React, { useState } from 'react';
-import { PurchasedTicket } from '../types';
+import { PurchasedTicket, Event } from '../types';
 import { Search, Calendar, MapPin, Tag, Flame, Compass, Ticket, Check, Download, Armchair } from 'lucide-react';
 import { motion } from 'motion/react';
 import { QRCode } from './QRCode';
+import QRCodeLib from 'qrcode';
 
 interface MyTicketsViewProps {
   tickets: PurchasedTicket[];
   onExploreClick: () => void;
+  events: Event[];
 }
+
+const getFieldLabelFromEvents = (fieldId: string, eventId: string, events: Event[]): string => {
+  const event = events.find(e => e.id === eventId);
+  if (!event) return fieldId;
+  
+  if (event.registrationRoles) {
+    for (const role of event.registrationRoles) {
+      if (role.formSections) {
+        for (const section of role.formSections) {
+          if (section.fields) {
+            const field = section.fields.find(f => f.id === fieldId);
+            if (field) return field.label;
+          }
+        }
+      }
+    }
+  }
+
+  if (event.formSections) {
+    for (const section of event.formSections) {
+      if (section.fields) {
+        const field = section.fields.find(f => f.id === fieldId);
+        if (field) return field.label;
+      }
+    }
+  }
+
+  if (event.customFormFields) {
+    const field = event.customFormFields.find(f => f.id === fieldId);
+    if (field) return field.label;
+  }
+
+  return fieldId;
+};
 
 const handleDownloadTicket = (ticket: PurchasedTicket) => {
   const content = `<!DOCTYPE html>
@@ -91,7 +127,7 @@ const handleDownloadTicket = (ticket: PurchasedTicket) => {
   URL.revokeObjectURL(url);
 };
 
-const handleDownloadTicketPNG = (receipt: PurchasedTicket) => {
+const handleDownloadTicketPNG = async (receipt: PurchasedTicket) => {
   if (!receipt) return;
   try {
     const canvas = document.createElement('canvas');
@@ -174,21 +210,8 @@ const handleDownloadTicketPNG = (receipt: PurchasedTicket) => {
     // Bottom section (QR Code on Left, security rules on right)
     const qrStartX = 35;
     const qrStartY = 240;
-    const cellSize = 11;
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(qrStartX - 5, qrStartY - 5, (7 * cellSize) + 10, (7 * cellSize) + 10);
-    
-    ctx.fillStyle = '#0f172a';
-    for (let r = 0; r < 7; r++) {
-      for (let c = 0; c < 7; c++) {
-        if ((r === 0 || r === 6 || c === 0 || c === 6) ||
-            (r >= 2 && r <= 4 && c >= 2 && c <= 4) ||
-            (r + c * 3) % 4 === 0) {
-          ctx.fillRect(qrStartX + c * cellSize, qrStartY + r * cellSize, cellSize, cellSize);
-        }
-      }
-    }
 
+    // Draw non-image items first
     // Ticket Code label
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 16px monospace';
@@ -209,6 +232,21 @@ const handleDownloadTicketPNG = (receipt: PurchasedTicket) => {
     ctx.font = 'bold 11px sans-serif';
     ctx.fillText('SAGATIX APP LICENSE VERIFIED SECURE', 145, 380);
 
+    // Draw real QR code using local qrcode package
+    const qrCanvas = document.createElement('canvas');
+    const checkinUrl = `${window.location.origin}/?checkin=${receipt.ticketCode}`;
+    await QRCodeLib.toCanvas(qrCanvas, checkinUrl, {
+      margin: 1,
+      width: 80,
+      color: {
+        dark: '#0f172a',
+        light: '#ffffff'
+      }
+    });
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(qrStartX - 5, qrStartY - 5, 80 + 10, 80 + 10);
+    ctx.drawImage(qrCanvas, qrStartX, qrStartY, 80, 80);
+
     // Trigger automatic file download
     const dataUrl = canvas.toDataURL('image/png');
     const dlLink = document.createElement('a');
@@ -225,6 +263,7 @@ const handleDownloadTicketPNG = (receipt: PurchasedTicket) => {
 export const MyTicketsView: React.FC<MyTicketsViewProps> = ({
   tickets,
   onExploreClick,
+  events,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -383,7 +422,7 @@ export const MyTicketsView: React.FC<MyTicketsViewProps> = ({
                         <span className="font-extrabold text-on-surface uppercase text-[9px] block">Data Isian Kustom:</span>
                         {Object.entries(ticket.formResponses).map(([fieldId, val]) => (
                           <div key={fieldId} className="flex justify-between gap-2">
-                            <span className="font-semibold text-on-surface-variant text-[9px]">{fieldId.replace(/_/g, ' ')}:</span>
+                            <span className="font-semibold text-on-surface-variant text-[9px]">{getFieldLabelFromEvents(fieldId, ticket.eventId, events)}:</span>
                             <span className="font-bold text-on-surface truncate max-w-[150px]">{val}</span>
                           </div>
                         ))}

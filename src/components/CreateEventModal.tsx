@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { Event, Category, TicketTier, CustomFieldDefinition, FormSection, RegistrationRoleConfig, ContentBlock } from '../types';
 import { X, Calendar, MapPin, Tag, Image, Briefcase, Sparkles, Plus, Trash, HelpCircle, FileText, ChevronRight, Layers } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface CreateEventModalProps {
   onClose: () => void;
   onSaveEvent: (newEvent: Event) => void;
+  eventData?: Event; // Support editing existing events
 }
 
 const CATEGORY_BANNER_PRESETS: Record<Category, string> = {
@@ -27,27 +28,79 @@ const SEATING_PRESETS = [
 export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   onClose,
   onSaveEvent,
+  eventData
 }) => {
-  // State Utama Formulir Acara
-  const [title, setTitle] = useState('');
-  const [category, setCategory] = useState<Category>('Game');
-  const [location, setLocation] = useState('');
-  const [rawDate, setRawDate] = useState('');
-  const [timeStr, setTimeStr] = useState('15:00');
-  const [description, setDescription] = useState('');
-  const [organizer, setOrganizer] = useState('');
-  const [customBannerUrl, setCustomBannerUrl] = useState('');
-  const [tag, setTag] = useState('Rekomendasi');
+  // Confirmation and local draft states
+  const [showConfirmPublish, setShowConfirmPublish] = useState(false);
+  const [pendingEvent, setPendingEvent] = useState<Event | null>(null);
+  const [hasDraft, setHasDraft] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+
+  // State Utama Formulir Acara - Start empty unless eventData exists
+  const [title, setTitle] = useState(eventData?.title || '');
+  const [category, setCategory] = useState<Category>(eventData?.category || 'Game');
+  const [location, setLocation] = useState(eventData?.location || '');
+  const [rawDate, setRawDate] = useState(eventData?.dateISO || '');
+  const [timeStr, setTimeStr] = useState(
+    eventData?.dateFullString?.split(', ').pop()?.split(' ')[0] || '15:00'
+  );
+  const [description, setDescription] = useState(eventData?.description || '');
+  const [organizer, setOrganizer] = useState(eventData?.organizer || '');
+  const [customBannerUrl, setCustomBannerUrl] = useState(eventData?.imageUrl || '');
+  const [tag, setTag] = useState(eventData?.tag || '');
   
   // Registration Open Countdown / Lock Configuration
-  const [regOpenDate, setRegOpenDate] = useState('');
-  const [regOpenTime, setRegOpenTime] = useState('');
+  const [regOpenDate, setRegOpenDate] = useState(
+    eventData?.registrationOpenTime?.split('T')[0] || ''
+  );
+  const [regOpenTime, setRegOpenTime] = useState(
+    eventData?.registrationOpenTime?.split('T')[1]?.slice(0, 5) || ''
+  );
 
-  // 1. DYNAMIC TICKET TIERS EDITOR (Pembagian kelas bisa dicustom 1, 2, 3 atau lebih, custom pricing & names in Rp)
-  const [tiers, setTiers] = useState<TicketTier[]>([
-    { id: 'custom-tier-1', name: 'Kelas Reguler (GA)', price: 75000, description: 'Akses masuk standar tribun belakang.', slotsAvailable: 100 },
-    { id: 'custom-tier-2', name: 'Akses VIP Platinum', price: 350000, description: 'Akses baris depan terdekat panggung & goody bag.', slotsAvailable: 25 }
-  ]);
+  // Check for existing draft on mount (skip draft check if editing an event)
+  React.useEffect(() => {
+    if (eventData) return;
+    const draft = localStorage.getItem('sagatix_create_event_draft');
+    if (draft) {
+      setHasDraft(true);
+    }
+  }, [eventData]);
+
+  const handleRestoreDraft = () => {
+    const draftStr = localStorage.getItem('sagatix_create_event_draft');
+    if (draftStr) {
+      try {
+        const draft = JSON.parse(draftStr);
+        if (draft.title !== undefined) setTitle(draft.title);
+        if (draft.category !== undefined) setCategory(draft.category);
+        if (draft.location !== undefined) setLocation(draft.location);
+        if (draft.rawDate !== undefined) setRawDate(draft.rawDate);
+        if (draft.timeStr !== undefined) setTimeStr(draft.timeStr);
+        if (draft.description !== undefined) setDescription(draft.description);
+        if (draft.organizer !== undefined) setOrganizer(draft.organizer);
+        if (draft.customBannerUrl !== undefined) setCustomBannerUrl(draft.customBannerUrl);
+        if (draft.tag !== undefined) setTag(draft.tag);
+        if (draft.regOpenDate !== undefined) setRegOpenDate(draft.regOpenDate);
+        if (draft.regOpenTime !== undefined) setRegOpenTime(draft.regOpenTime);
+        if (draft.tiers !== undefined) setTiers(draft.tiers);
+        if (draft.roles !== undefined) setRoles(draft.roles);
+        if (draft.contentBlocks !== undefined) setContentBlocks(draft.contentBlocks);
+        if (draft.selectedSeatingPlan !== undefined) setSelectedSeatingPlan(draft.selectedSeatingPlan);
+        if (draft.customSeatingUrl !== undefined) setCustomSeatingUrl(draft.customSeatingUrl);
+        setHasDraft(false);
+      } catch (e) {
+        console.error("Failed to parse event draft", e);
+      }
+    }
+  };
+
+  const handleClearDraft = () => {
+    localStorage.removeItem('sagatix_create_event_draft');
+    setHasDraft(false);
+  };
+
+  // 1. DYNAMIC TICKET TIERS EDITOR - Start empty for manual configuration
+  const [tiers, setTiers] = useState<TicketTier[]>(eventData?.tiers || []);
   const [newTierName, setNewTierName] = useState('');
   const [newTierPrice, setNewTierPrice] = useState(100000);
   const [newTierDesc, setNewTierDesc] = useState('');
@@ -69,24 +122,16 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
     setNewTierSlots(50);
   };
 
-  const handleRemoveTier = (id: string) => {
-    if (tiers.length <= 1) {
-      alert('Event wajib memiliki minimal 1 kelas tiket pendaftaran!');
-      return;
-    }
+    const handleRemoveTier = (id: string) => {
     setTiers(tiers.filter(t => t.id !== id));
   };
 
-  // 2. CUSTOM REGISTRANT ROLE OPTIONS (Bisa diatur pendaftar, narasumber, penonton dll)
-  const [roles, setRoles] = useState<RegistrationRoleConfig[]>([
-    { id: 'role-team-ml', name: 'Peserta Turnamen (Team)', isTeamType: true, description: 'Registrasi 1 slot tim penuh untuk turnamen kompetisi', maxQuantity: 1 },
-    { id: 'role-spectator-ml', name: 'Penonton Pro Arena', isTeamType: false, description: 'Tiket masuk penonton umum', maxQuantity: 5 }
-  ]);
+  // 2. CUSTOM REGISTRANT ROLE OPTIONS - Start empty for manual configuration (Requirement 4)
+  const [roles, setRoles] = useState<RegistrationRoleConfig[]>(eventData?.registrationRoles || []);
   const [newRoleName, setNewRoleName] = useState('');
   const [newRoleDesc, setNewRoleDesc] = useState('');
   const [newRoleIsTeam, setNewRoleIsTeam] = useState(false);
   const [newRoleMaxQty, setNewRoleMaxQty] = useState<number>(5);
-  const [isFormValid, setIsFormValid] = useState(true); // dummy/temporary state or check structure
 
   const handleAddRole = () => {
     if (!newRoleName.trim()) return;
@@ -95,42 +140,52 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       name: newRoleName.trim(),
       isTeamType: newRoleIsTeam,
       maxQuantity: newRoleIsTeam ? 1 : Number(newRoleMaxQty) || 5,
-      description: newRoleDesc.trim() || 'Akses pendaftaran khusus.'
+      description: newRoleDesc.trim() || 'Akses pendaftaran khusus.',
+      formSections: [],
+      allowedTierIds: tiers.map(t => t.id)
     };
     setRoles([...roles, newRole]);
     setNewRoleName('');
     setNewRoleDesc('');
     setNewRoleIsTeam(false);
     setNewRoleMaxQty(5);
+    setValidationErrors(prev => ({ ...prev, roles: "" }));
   };
 
   const handleRemoveRole = (id: string) => {
-    if (roles.length <= 1) {
-      alert('Wajib memiliki minimal 1 kategori registrasi pendaftar!');
-      return;
-    }
     setRoles(roles.filter(r => r.id !== id));
+    if (selectedRoleIdForForm === id) {
+      setSelectedRoleIdForForm('');
+    }
   };
 
-  // 3. SECION-BY-SECTION CUSTOM FORM BUILDER (Mengatur isian per-section: "Informasi Ketua", "Player 1", dll)
-  const [sections, setSections] = useState<FormSection[]>([
-    {
-      id: 'sec-kapten',
-      title: 'Section 1: Informasi Ketua Tim (Kapten)',
-      fields: [
-        { id: 'name', label: 'Nama Lengkap Kapten', type: 'text', required: true, placeholder: 'Contoh: Lemon Wijaya' },
-        { id: 'ign_kapten', label: 'In-Game ID Kapten', type: 'text', required: true, placeholder: 'Contoh: Lemonz#9999' }
-      ]
-    },
-    {
-      id: 'sec-player2',
-      title: 'Section 2: Informasi Player 2',
-      fields: [
-        { id: 'name_p2', label: 'Nama Lengkap Player 2', type: 'text', required: true, placeholder: 'Nama pemain kedua' },
-        { id: 'ign_p2', label: 'In-Game ID Player 2', type: 'text', required: true, placeholder: 'Nickname#ID' }
-      ]
+  // Active Category / Role for designing Custom Form (Requirement 3)
+  const [selectedRoleIdForForm, setSelectedRoleIdForForm] = useState(
+    eventData?.registrationRoles?.[0]?.id || ''
+  );
+
+  // Automatically select the first category if none is active
+  React.useEffect(() => {
+    if (roles.length > 0 && !selectedRoleIdForForm) {
+      setSelectedRoleIdForForm(roles[0].id);
     }
-  ]);
+  }, [roles, selectedRoleIdForForm]);
+
+  const currentRoleForForm = roles.find(r => r.id === selectedRoleIdForForm);
+  const sections = currentRoleForForm?.formSections || [];
+
+  const setActiveRoleSections = (newSecs: FormSection[] | ((prev: FormSection[]) => FormSection[])) => {
+    setRoles(prevRoles =>
+      prevRoles.map(r => {
+        if (r.id === selectedRoleIdForForm) {
+          const currentSections = r.formSections || [];
+          const updatedSections = typeof newSecs === 'function' ? newSecs(currentSections) : newSecs;
+          return { ...r, formSections: updatedSections };
+        }
+        return r;
+      })
+    );
+  };
 
   const [newSectionTitle, setNewSectionTitle] = useState('');
 
@@ -139,6 +194,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const [newFieldLabel, setNewFieldLabel] = useState('');
   const [newFieldType, setNewFieldType] = useState<'text' | 'number' | 'textarea' | 'email'>('text');
   const [newFieldRequired, setNewFieldRequired] = useState(true);
+  const [newFieldAllowedTiers, setNewFieldAllowedTiers] = useState<string[]>([]);
 
   const handleAddSection = () => {
     if (!newSectionTitle.trim()) return;
@@ -147,7 +203,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       title: newSectionTitle.trim(),
       fields: []
     };
-    setSections([...sections, newSec]);
+    setActiveRoleSections(prev => [...prev, newSec]);
     if (!selectedSectionId) {
       setSelectedSectionId(newSec.id);
     }
@@ -155,7 +211,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   };
 
   const handleRemoveSection = (secId: string) => {
-    setSections(sections.filter(s => s.id !== secId));
+    setActiveRoleSections(prev => prev.filter(s => s.id !== secId));
     if (selectedSectionId === secId) {
       setSelectedSectionId('');
     }
@@ -173,10 +229,11 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       label: newFieldLabel.trim(),
       type: newFieldType,
       required: newFieldRequired,
-      placeholder: `Masukkan ${newFieldLabel.trim()}...`
+      placeholder: `Masukkan ${newFieldLabel.trim()}...`,
+      allowedTierIds: newFieldAllowedTiers.length > 0 ? newFieldAllowedTiers : undefined
     };
 
-    setSections(prev =>
+    setActiveRoleSections(prev =>
       prev.map(sec => {
         if (sec.id === selectedSectionId) {
           return {
@@ -189,10 +246,11 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
     );
 
     setNewFieldLabel('');
+    setNewFieldAllowedTiers([]);
   };
 
   const handleRemoveFieldFromSection = (secId: string, fieldId: string) => {
-    setSections(prev =>
+    setActiveRoleSections(prev =>
       prev.map(sec => {
         if (sec.id === secId) {
           return {
@@ -205,10 +263,8 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
     );
   };
 
-  // 4. ADD TEXT OR IMAGE CONTENT BLOCKS (Bisa menambahkan teks keterangan / poster sponsor tambahan)
-  const [contentBlocks, setContentBlocks] = useState<ContentBlock[]>([
-    { id: 'block-init', type: 'text', title: 'Hadiah Kejuaraan (Prizepool)', value: 'Total hadiah mencapai Rp 50.000.000 disertai trofi medali fisik dan sertifikat elektronik nasional.' }
-  ]);
+  // 4. ADD TEXT OR IMAGE CONTENT BLOCKS - Start empty (Requirement 4)
+  const [contentBlocks, setContentBlocks] = useState<ContentBlock[]>(eventData?.contentBlocks || []);
   const [newBlockType, setNewBlockType] = useState<'text' | 'image'>('text');
   const [newBlockTitle, setNewBlockTitle] = useState('');
   const [newBlockVal, setNewBlockVal] = useState('');
@@ -231,13 +287,45 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   };
 
   // Denah layout SEATING
-  const [selectedSeatingPlan, setSelectedSeatingPlan] = useState<string>(SEATING_PRESETS[0].url);
-  const [customSeatingUrl, setCustomSeatingUrl] = useState('');
+  const [selectedSeatingPlan, setSelectedSeatingPlan] = useState<string>(
+    eventData?.seatingChartUrl && SEATING_PRESETS.find(p => p.url === eventData.seatingChartUrl)
+      ? eventData.seatingChartUrl
+      : SEATING_PRESETS[0].url
+  );
+  const [customSeatingUrl, setCustomSeatingUrl] = useState(
+    eventData?.seatingChartUrl && !SEATING_PRESETS.find(p => p.url === eventData.seatingChartUrl)
+      ? eventData.seatingChartUrl
+      : ''
+  );
+
+  // Debounced Autosave draft to local storage (Requirement 5 - Combats sluggish typing lag)
+  React.useEffect(() => {
+    if (eventData) return; // Skip saving draft when editing an event
+    const timer = setTimeout(() => {
+      if (title || location || description || organizer || tiers.length > 0 || roles.length > 0) {
+        const draft = {
+          title, category, location, rawDate, timeStr, description, organizer, customBannerUrl, tag, regOpenDate, regOpenTime, tiers, roles, contentBlocks, selectedSeatingPlan, customSeatingUrl
+        };
+        localStorage.setItem('sagatix_create_event_draft', JSON.stringify(draft));
+      }
+    }, 1000); // 1 second debounce
+    return () => clearTimeout(timer);
+  }, [title, category, location, rawDate, timeStr, description, organizer, customBannerUrl, tag, regOpenDate, regOpenTime, tiers, roles, contentBlocks, selectedSeatingPlan, customSeatingUrl, eventData]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title || !location || !rawDate) {
-      alert('Harap isi Judul, Lokasi, dan Tanggal!');
+    
+    // Manual validation checks (Requirement 4)
+    const errors: Record<string, string> = {};
+    if (!title.trim()) errors.title = "Judul acara wajib diisi!";
+    if (!location.trim()) errors.location = "Lokasi acara / venue wajib diisi!";
+    if (!rawDate.trim()) errors.rawDate = "Tanggal kalender wajib diisi!";
+    if (tiers.length === 0) errors.tiers = "Wajib menambahkan minimal 1 kelas tiket pendaftaran!";
+    if (roles.length === 0) errors.roles = "Wajib menambahkan minimal 1 kategori pendaftar!";
+
+    if (Object.keys(errors).length > 0) {
+      setValidationErrors(errors);
+      alert('Harap lengkapi semua isian yang wajib diisi dan periksa kembali format form!');
       return;
     }
 
@@ -259,16 +347,19 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
 
     // Get prices
     const prices = tiers.map(t => t.price);
-    const priceMin = Math.min(...prices, 0);
-    const priceMax = Math.max(...prices, 1000000);
+    const priceMin = prices.length > 0 ? Math.min(...prices) : 0;
+    const priceMax = prices.length > 0 ? Math.max(...prices) : 0;
 
     const totalTickets = tiers.reduce((acc, current) => acc + current.slotsAvailable, 0);
 
     // Legacy fallback flat list of custom questions
     const flatLegacyFields: CustomFieldDefinition[] = [];
-    sections.forEach(sec => {
-      sec.fields.forEach(f => {
-        flatLegacyFields.push(f);
+    roles.forEach(role => {
+      const roleSecs = role.formSections || [];
+      roleSecs.forEach(sec => {
+        sec.fields.forEach(f => {
+          flatLegacyFields.push(f);
+        });
       });
     });
 
@@ -277,7 +368,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       : undefined;
 
     const newEvent: Event = {
-      id: `evt-custom-${Date.now()}`,
+      id: eventData?.id || `evt-custom-${Date.now()}`,
       title,
       category,
       dateMonth,
@@ -296,7 +387,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       tiers: tiers,
       seatingChartUrl: customSeatingUrl || selectedSeatingPlan,
       registrationRoles: roles,
-      formSections: sections,
+      formSections: sections, // active role form sections
       contentBlocks: contentBlocks,
       registrationOpenTime,
       customFormFields: flatLegacyFields.length > 0 ? flatLegacyFields : [
@@ -304,7 +395,16 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       ]
     };
 
-    onSaveEvent(newEvent);
+    setPendingEvent(newEvent);
+    setShowConfirmPublish(true);
+  };
+
+  const handleConfirmPublish = () => {
+    if (pendingEvent) {
+      onSaveEvent(pendingEvent);
+      localStorage.removeItem('sagatix_create_event_draft');
+    }
+    setShowConfirmPublish(false);
   };
 
   return (
@@ -347,6 +447,31 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
         {/* Isi Formulir */}
         <form onSubmit={handleSubmit} className="p-6 overflow-y-auto no-scrollbar space-y-7 text-xs">
           
+          {hasDraft && (
+            <div className="bg-primary/10 border border-primary/20 rounded-xl p-3.5 flex items-center justify-between text-xs mb-4">
+              <div className="space-y-0.5 text-left">
+                <span className="font-extrabold text-primary block">Draf Pembuatan Acara Ditemukan!</span>
+                <span className="text-on-surface-variant font-medium text-[10px]">Anda memiliki progres pembuatan acara sebelumnya yang tersimpan di perangkat.</span>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleRestoreDraft}
+                  className="bg-primary text-on-primary font-black px-3 py-1.5 rounded-lg cursor-pointer hover:opacity-90 active:scale-95 transition-all text-[11px]"
+                >
+                  Pulihkan Draf
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearDraft}
+                  className="bg-surface border border-outline hover:bg-slate-50 font-bold px-3 py-1.5 rounded-lg cursor-pointer text-on-surface transition-all text-[11px]"
+                >
+                  Hapus Draf
+                </button>
+              </div>
+            </div>
+          )}
+          
           {/* SEKSI 1: INFORMASI UMUM */}
           <div className="space-y-4">
             <h3 className="text-xs font-black text-primary uppercase tracking-widest flex items-center gap-1.5 border-b border-outline-variant/60 pb-2">
@@ -363,6 +488,9 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                 onChange={(e) => setTitle(e.target.value)}
                 className="w-full bg-surface-container outline-hidden rounded-xl border border-outline px-4 py-2.5 text-xs focus:ring-1 focus:ring-primary text-on-surface font-semibold"
               />
+              {validationErrors.title && (
+                <p className="text-red-500 text-[10px] font-bold mt-1 text-left">{validationErrors.title}</p>
+              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -404,6 +532,9 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                   onChange={(e) => setRawDate(e.target.value)}
                   className="w-full bg-surface-container outline-hidden rounded-xl border border-outline px-4 py-2.5 text-xs focus:ring-1 focus:ring-primary text-on-surface font-bold pointer-events-auto cursor-pointer"
                 />
+                {validationErrors.rawDate && (
+                  <p className="text-red-500 text-[10px] font-bold mt-1 text-left">{validationErrors.rawDate}</p>
+                )}
               </div>
 
               <div className="space-y-1">
@@ -427,6 +558,9 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                 onChange={(e) => setLocation(e.target.value)}
                 className="w-full bg-surface-container outline-hidden rounded-xl border border-outline px-4 py-2.5 text-xs focus:ring-1 focus:ring-primary text-on-surface font-semibold"
               />
+              {validationErrors.location && (
+                <p className="text-red-500 text-[10px] font-bold mt-1 text-left">{validationErrors.location}</p>
+              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -521,15 +655,52 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
             </p>
 
             {/* List Roles */}
-            <div className="space-y-1.5 max-h-32 overflow-y-auto no-scrollbar pr-1">
+             <div className="space-y-1.5 max-h-64 overflow-y-auto no-scrollbar pr-1">
               {roles.map(r => (
-                <div key={r.id} className="flex justify-between items-center bg-surface p-2.5 rounded-lg border border-outline-variant text-[11px]">
-                  <div>
+                <div key={r.id} className="flex justify-between items-start bg-surface p-2.5 rounded-lg border border-outline-variant text-[11px] gap-2.5">
+                  <div className="flex-grow min-w-0">
                     <span className="font-extrabold text-on-surface">{r.name}</span>
                     <span className="text-[10px] text-on-surface-variant block">{r.description}</span>
                     <span className="text-[9px] text-primary font-bold block mt-0.5">Maks. Pembelian: {r.maxQuantity || 5} Tiket</span>
+                    
+                    {/* Checkbox list of allowed tiers (Requirement 1) */}
+                    {tiers.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-outline-variant/40 space-y-1">
+                        <span className="text-[9px] font-black text-slate-500 block uppercase tracking-wider">Batasi Kelas Tiket Khusus Kategori Ini:</span>
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
+                          {tiers.map(t => {
+                            const isAllowed = !r.allowedTierIds || r.allowedTierIds.length === 0 || r.allowedTierIds.includes(t.id);
+                            return (
+                              <label key={t.id} className="flex items-center gap-1 cursor-pointer text-[10px] text-on-surface font-bold select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={isAllowed}
+                                  onChange={(e) => {
+                                    const currentAllowed = r.allowedTierIds || tiers.map(x => x.id);
+                                    let newAllowed: string[];
+                                    if (e.target.checked) {
+                                      newAllowed = [...currentAllowed, t.id];
+                                    } else {
+                                      newAllowed = currentAllowed.filter(id => id !== t.id);
+                                    }
+                                    setRoles(prev => prev.map(x => {
+                                      if (x.id === r.id) {
+                                        return { ...x, allowedTierIds: newAllowed };
+                                      }
+                                      return x;
+                                    }));
+                                  }}
+                                  className="rounded text-primary focus:ring-primary w-3 h-3 cursor-pointer border-outline-variant"
+                                />
+                                <span>{t.name}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     <span className={`text-[9px] px-2 py-0.5 rounded font-black ${
                       r.isTeamType ? 'bg-amber-100 text-amber-800 border border-amber-300/30' : 'bg-blue-100 text-blue-800'
                     }`}>
@@ -538,7 +709,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                     <button
                       type="button"
                       onClick={() => handleRemoveRole(r.id)}
-                      className="text-on-surface-variant hover:text-error transition-colors p-1"
+                      className="text-on-surface-variant hover:text-error transition-colors p-1 cursor-pointer"
                     >
                       <Trash className="w-4 h-4" />
                     </button>
@@ -546,6 +717,9 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                 </div>
               ))}
             </div>
+            {validationErrors.roles && (
+              <p className="text-red-500 text-[11px] font-bold mt-1 text-left">{validationErrors.roles}</p>
+            )}
 
             {/* Add New Custom Role Form */}
             <div className="bg-surface/50 p-3.5 rounded-xl border border-outline-variant/50 space-y-3.5">
@@ -646,6 +820,9 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                 </div>
               ))}
             </div>
+            {validationErrors.tiers && (
+              <p className="text-red-500 text-[11px] font-bold mt-1 text-left">{validationErrors.tiers}</p>
+            )}
 
             {/* Add New Ticket Tier Draft Area */}
             <div className="bg-surface-container p-4.5 rounded-2xl border border-outline-variant space-y-4">
@@ -718,6 +895,26 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
             <p className="text-[11px] text-on-surface-variant leading-relaxed">
               Anda bebas menetapkan pengisian formulir teratur berkelanjutan <strong>per-section</strong>. Misal Section Pertama diisi data <u>Ketua Tim</u>, Section Kedua diisi <u>Player 1</u>, ketiga <u>Player 2</u>, dan seterusnya hingga selesai/finish.
             </p>
+
+            {/* Category Selector Dropdown for Role-Specific Form Building */}
+            <div className="bg-primary/5 p-4 rounded-xl border border-primary/15 space-y-2 text-left">
+              <label className="text-[10px] font-black uppercase text-primary block">Pilih Kategori Registrasi untuk Formulir Ini:</label>
+              {roles.length === 0 ? (
+                <div className="text-xs text-amber-800 font-bold bg-amber-50 p-2.5 rounded-lg border border-amber-200">
+                  ⚠️ Belum ada kategori pendaftar yang dibuat. Tambahkan kategori pendaftar di Langkah 2 terlebih dahulu!
+                </div>
+              ) : (
+                <select
+                  value={selectedRoleIdForForm}
+                  onChange={(e) => setSelectedRoleIdForForm(e.target.value)}
+                  className="w-full bg-surface px-3 py-2 border border-outline rounded-xl text-xs font-bold text-on-surface focus:ring-1 focus:ring-primary outline-hidden"
+                >
+                  {roles.map(r => (
+                    <option key={r.id} value={r.id}>{r.name} {r.isTeamType ? '(Kelompok/Tim)' : '(Individu)'}</option>
+                  ))}
+                </select>
+              )}
+            </div>
 
             {/* Sections structure Visual Area */}
             <div className="space-y-3">
@@ -831,6 +1028,38 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                       </select>
                     </div>
                   </div>
+
+                  {/* Select Tiers restriction for this field (Requirement 5) */}
+                  {tiers.length > 0 && (
+                    <div className="space-y-1 mt-2 pt-2 border-t border-outline-variant/30 text-left">
+                      <span className="text-[9px] font-black text-on-surface-variant uppercase tracking-wider block">Batasi Pertanyaan Ini Hanya Untuk Kelas Tiket Tertentu (Opsional):</span>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-1">
+                        {tiers.map(t => {
+                          const isChecked = newFieldAllowedTiers.includes(t.id);
+                          return (
+                            <label key={t.id} className="flex items-center gap-1.5 cursor-pointer text-[10px] text-on-surface font-bold select-none">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setNewFieldAllowedTiers([...newFieldAllowedTiers, t.id]);
+                                  } else {
+                                    setNewFieldAllowedTiers(newFieldAllowedTiers.filter(id => id !== t.id));
+                                  }
+                                }}
+                                className="rounded text-primary focus:ring-primary w-3.5 h-3.5 cursor-pointer border-outline-variant"
+                              />
+                              <span>{t.name}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[8px] text-on-surface-variant italic leading-normal">
+                        * Biarkan kosong jika pertanyaan ini berlaku untuk semua kelas tiket (Contoh: pertanyaan "Pantangan Makanan" hanya dicentang untuk kelas tiket "VIP").
+                      </p>
+                    </div>
+                  )}
 
                   <div className="flex justify-between items-center pt-2 border-t border-outline-variant/30">
                     <div className="flex items-center gap-1.5">
@@ -1017,6 +1246,53 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
 
         </form>
       </motion.div>
+
+      {/* Confirmation Dialog Overlay */}
+      <AnimatePresence>
+        {showConfirmPublish && (
+          <div className="fixed inset-0 z-200 flex items-center justify-center p-4">
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-xs"
+              onClick={() => setShowConfirmPublish(false)}
+            />
+            {/* Confirmation Box */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 15 }}
+              className="relative bg-surface rounded-2xl border border-outline-variant p-6 max-w-sm w-full space-y-4 shadow-2xl text-center z-10"
+            >
+              <Sparkles className="w-12 h-12 text-primary mx-auto animate-pulse" />
+              <div className="space-y-1">
+                <h3 className="font-extrabold text-sm text-on-surface uppercase tracking-tight">Konfirmasi Publikasi Acara</h3>
+                <p className="text-xs text-on-surface-variant leading-relaxed">
+                  Apakah Anda yakin ingin mempublikasikan acara <strong className="text-on-surface">"{title}"</strong> ke database Firebase? Acara ini akan langsung aktif di katalog.
+                </p>
+              </div>
+              <div className="flex gap-2 pt-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPublish(false)}
+                  className="flex-1 bg-surface border border-outline hover:bg-slate-50 font-bold py-2.5 rounded-xl cursor-pointer text-on-surface transition-all"
+                >
+                  Kembali Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmPublish}
+                  className="flex-1 bg-primary text-on-primary font-black py-2.5 rounded-xl cursor-pointer hover:opacity-95 shadow-sm transition-all"
+                >
+                  Ya, Publikasikan!
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
