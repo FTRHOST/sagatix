@@ -1,15 +1,15 @@
-import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  GoogleAuthProvider, 
-  signInWithPopup, 
-  signOut, 
+import { initializeApp } from "firebase/app";
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut,
   onAuthStateChanged,
-  User as FirebaseUser
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  doc, 
+  User as FirebaseUser,
+} from "firebase/auth";
+import {
+  getFirestore,
+  doc,
   getDocFromServer,
   collection,
   doc as firestoreDoc,
@@ -21,18 +21,19 @@ import {
   deleteDoc,
   query,
   where,
-  onSnapshot
-} from 'firebase/firestore';
+  onSnapshot,
+} from "firebase/firestore";
 
 // Configuration provided explicitly by the user
+
 const firebaseConfig = {
-  apiKey: "AIzaSyC1F3gvVAkP5naRatmQBLvgzB3g6-jQUCs",
-  authDomain: "sagatix.firebaseapp.com",
-  projectId: "sagatix",
-  storageBucket: "sagatix.firebasestorage.app",
-  messagingSenderId: "756688568443",
-  appId: "1:756688568443:web:bd43538bee3afad10b62de",
-  measurementId: "G-PEKXL1TV0Q"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
 // Initialize Firebase
@@ -43,12 +44,12 @@ export const googleProvider = new GoogleAuthProvider();
 
 // Firestore Error Handler as specified in SKILL.md
 export enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
+  CREATE = "create",
+  UPDATE = "update",
+  DELETE = "delete",
+  LIST = "list",
+  GET = "get",
+  WRITE = "write",
 }
 
 export interface FirestoreErrorInfo {
@@ -65,10 +66,14 @@ export interface FirestoreErrorInfo {
       providerId?: string | null;
       email?: string | null;
     }[];
-  }
+  };
 }
 
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null,
+) {
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -77,15 +82,16 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
       emailVerified: auth.currentUser?.emailVerified,
       isAnonymous: auth.currentUser?.isAnonymous,
       tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || []
+      providerInfo:
+        auth.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
     },
     operationType,
-    path
+    path,
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  console.error("Firestore Error: ", JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
 
@@ -93,11 +99,18 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 async function testConnection() {
   try {
     // Attempting background connection test
-    await getDocFromServer(doc(db, 'test-connection-sagatix', 'connection-check'));
+    await getDocFromServer(
+      doc(db, "test-connection-sagatix", "connection-check"),
+    );
     console.log("Firebase connection test performed successfully.");
   } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration: Firestore client is offline.");
+    if (
+      error instanceof Error &&
+      error.message.includes("the client is offline")
+    ) {
+      console.error(
+        "Please check your Firebase configuration: Firestore client is offline.",
+      );
     } else {
       console.log("Firebase connection test completed.");
     }
@@ -108,12 +121,12 @@ testConnection();
 // Auth helper functions
 export function sanitizeForFirestore<T>(data: T): T {
   if (data === undefined) return null as T;
-  if (data === null || typeof data !== 'object') return data;
-  
+  if (data === null || typeof data !== "object") return data;
+
   if (Array.isArray(data)) {
-    return data.map(item => sanitizeForFirestore(item)) as T;
+    return data.map((item) => sanitizeForFirestore(item)) as T;
   }
-  
+
   const obj = { ...data } as Record<string, any>;
   for (const key of Object.keys(obj)) {
     if (obj[key] === undefined) {
