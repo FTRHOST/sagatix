@@ -4,7 +4,7 @@ import { ArrowLeft, Calendar, MapPin, Shield, Check, Sparkles, User, Award, Info
 import { motion, AnimatePresence } from 'motion/react';
 import { signInWithGoogle, auth, db } from '../lib/firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, collection, getDocs, query, where } from 'firebase/firestore';
 import { QRCode } from './QRCode';
 import QRCodeLib from 'qrcode';
 
@@ -436,7 +436,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
     }
   };
 
-  const submitRegistration = () => {
+  const submitRegistration = async () => {
     if (!selectedTier) return;
 
     // Generate unique ticketing code (SAGATIX style)
@@ -454,14 +454,31 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
     };
     const seatPrefix = getSeatPrefix(selectedTier.name);
     
-    // Find all currently booked/blocked seat numbers for this event and tier
+    // Find all currently booked/blocked seat numbers for this event and tier by fetching explicitly
     const bookedSeatCodes = new Set<string>();
-    if (tickets) {
-      tickets.forEach((t) => {
-        if (t.eventId === event.id && t.tierName === selectedTier.name && t.seatNumbers) {
-          t.seatNumbers.forEach((s) => bookedSeatCodes.add(s));
+    try {
+      const q = query(
+        collection(db, 'tickets'),
+        where('eventId', '==', event.id),
+        where('tierName', '==', selectedTier.name)
+      );
+      const snapshot = await getDocs(q);
+      snapshot.forEach(doc => {
+        const t = doc.data() as PurchasedTicket;
+        if (t.seatNumbers) {
+          t.seatNumbers.forEach((s: string) => bookedSeatCodes.add(s));
         }
       });
+    } catch (e) {
+      console.error("Failed to explicitly fetch seats", e);
+      // Fallback to local tickets array if offline/error
+      if (tickets) {
+        tickets.forEach((t) => {
+          if (t.eventId === event.id && t.tierName === selectedTier.name && t.seatNumbers) {
+            t.seatNumbers.forEach((s) => bookedSeatCodes.add(s));
+          }
+        });
+      }
     }
 
     const seatNumbersArray: string[] = [];

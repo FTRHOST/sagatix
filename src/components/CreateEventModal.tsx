@@ -7,6 +7,7 @@ interface CreateEventModalProps {
   onClose: () => void;
   onSaveEvent: (newEvent: Event) => void;
   eventData?: Event; // Support editing existing events
+  currentUser?: { fullName: string; email: string; role?: 'superadmin' | 'admin' | 'biasa'; assignedOrganizer?: string } | null;
 }
 
 const CATEGORY_BANNER_PRESETS: Record<Category, string> = {
@@ -28,7 +29,8 @@ const SEATING_PRESETS = [
 export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   onClose,
   onSaveEvent,
-  eventData
+  eventData,
+  currentUser
 }) => {
   // Confirmation and local draft states
   const [showConfirmPublish, setShowConfirmPublish] = useState(false);
@@ -45,7 +47,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
     eventData?.dateFullString?.split(', ').pop()?.split(' ')[0] || '15:00'
   );
   const [description, setDescription] = useState(eventData?.description || '');
-  const [organizer, setOrganizer] = useState(eventData?.organizer || '');
+  const [organizer, setOrganizer] = useState(eventData?.organizer || (currentUser?.role === 'admin' ? currentUser?.assignedOrganizer : '') || '');
   const [customBannerUrl, setCustomBannerUrl] = useState(eventData?.imageUrl || '');
   const [tag, setTag] = useState(eventData?.tag || '');
   
@@ -109,7 +111,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const handleAddTier = () => {
     if (!newTierName.trim()) return;
     const newTier: TicketTier = {
-      id: `tier-dy-${Date.now()}`,
+      id: `tier-dy-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       name: newTierName.trim(),
       price: Number(newTierPrice) || 0,
       description: newTierDesc.trim() || 'Fasilitas kelas standar.',
@@ -136,7 +138,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const handleAddRole = () => {
     if (!newRoleName.trim()) return;
     const newRole: RegistrationRoleConfig = {
-      id: `role-dy-${Date.now()}`,
+      id: `role-dy-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       name: newRoleName.trim(),
       isTeamType: newRoleIsTeam,
       maxQuantity: newRoleIsTeam ? 1 : Number(newRoleMaxQty) || 5,
@@ -199,7 +201,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const handleAddSection = () => {
     if (!newSectionTitle.trim()) return;
     const newSec: FormSection = {
-      id: `sec-dy-${Date.now()}`,
+      id: `sec-dy-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       title: newSectionTitle.trim(),
       fields: []
     };
@@ -225,7 +227,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
     if (!newFieldLabel.trim()) return;
 
     const newField: CustomFieldDefinition = {
-      id: `f-dy-${Date.now()}`,
+      id: `f-dy-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       label: newFieldLabel.trim(),
       type: newFieldType,
       required: newFieldRequired,
@@ -272,7 +274,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const handleAddContentBlock = () => {
     if (!newBlockVal.trim()) return;
     const newBlock: ContentBlock = {
-      id: `block-dy-${Date.now()}`,
+      id: `block-dy-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       type: newBlockType,
       title: newBlockTitle.trim() || undefined,
       value: newBlockVal.trim()
@@ -368,7 +370,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       : undefined;
 
     const newEvent: Event = {
-      id: eventData?.id || `evt-custom-${Date.now()}`,
+      id: eventData?.id || `evt-custom-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       title,
       category,
       dateMonth,
@@ -571,7 +573,8 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                   placeholder="Contoh: SAGATIX Championship"
                   value={organizer}
                   onChange={(e) => setOrganizer(e.target.value)}
-                  className="w-full bg-surface-container outline-hidden rounded-xl border border-outline px-4 py-2.5 text-xs text-on-surface font-medium"
+                  disabled={currentUser?.role === 'admin'}
+                  className={`w-full bg-surface-container outline-hidden rounded-xl border border-outline px-4 py-2.5 text-xs text-on-surface font-medium ${currentUser?.role === 'admin' ? 'opacity-70 cursor-not-allowed' : ''}`}
                 />
               </div>
 
@@ -670,10 +673,12 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                         <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
                           {tiers.map(t => {
                             const isAllowed = !r.allowedTierIds || r.allowedTierIds.length === 0 || r.allowedTierIds.includes(t.id);
+                            const checkboxId = `role-${r.id}-tier-${t.id}`;
                             return (
-                              <label key={t.id} className="flex items-center gap-1 cursor-pointer text-[10px] text-on-surface font-bold select-none">
+                              <label key={t.id} htmlFor={checkboxId} className="flex items-center gap-1 cursor-pointer text-[10px] text-on-surface font-bold select-none">
                                 <input
                                   type="checkbox"
+                                  id={checkboxId}
                                   checked={isAllowed}
                                   onChange={(e) => {
                                     const currentAllowed = r.allowedTierIds || tiers.map(x => x.id);

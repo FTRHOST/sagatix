@@ -12,10 +12,8 @@ export const QRCode: React.FC<QRCodeProps> = ({ value, size = 80 }) => {
   useEffect(() => {
     if (!value) return;
     
-    // Encode the check-in URL with the ticket code
-    const checkinUrl = `${window.location.origin}/?checkin=${value}`;
-
-    QRCodeLib.toDataURL(checkinUrl, {
+    // Encode the ticket code directly
+    QRCodeLib.toDataURL(value, {
       margin: 1,
       width: 150,
       color: {

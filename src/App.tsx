@@ -26,6 +26,7 @@ import { EventCard } from './components/EventCard';
 import { EventDetailPage } from './components/EventDetailPage';
 import { CreateEventModal } from './components/CreateEventModal';
 import { MyTicketsView } from './components/MyTicketsView';
+import { QRScanner } from './components/QRScanner';
 import {
   Compass,
   Ticket,
@@ -61,7 +62,7 @@ import { motion, AnimatePresence } from 'motion/react';
 export default function App() {
   // Navigation Tab Utama: 'explore' | 'tickets' | 'help' | 'admin' (Requirement 3 & 10)
   const [activeTab, setActiveTab] = useState<'explore' | 'tickets' | 'help' | 'admin'>('explore');
-  const [adminSubTab, setAdminSubTab] = useState<'scanner' | 'config' | 'sandbox' | 'events'>('events');
+  const [adminSubTab, setAdminSubTab] = useState<'scanner' | 'config' | 'sandbox' | 'events' | 'users'>('events');
   const [eventToEdit, setEventToEdit] = useState<Event | null>(null);
   const [selectedManageSeatsEvent, setSelectedManageSeatsEvent] = useState<Event | null>(null);
   const [selectedManageSeatsTier, setSelectedManageSeatsTier] = useState<TicketTier | null>(null);
@@ -69,10 +70,11 @@ export default function App() {
   const [registrantSearchQuery, setRegistrantSearchQuery] = useState('');
 
   // Authentication State (Requirement 8)
-  const [currentUser, setCurrentUser] = useState<{ fullName: string; email: string; role?: 'admin' | 'biasa' } | null>(() => {
+  const [currentUser, setCurrentUser] = useState<{ fullName: string; email: string; role?: 'superadmin' | 'admin' | 'biasa'; assignedOrganizer?: string } | null>(() => {
     const saved = localStorage.getItem('sagatix_user');
     return saved ? JSON.parse(saved) : null;
   });
+  const [allUsers, setAllUsers] = useState<any[]>([]); // To manage users via superadmin
   const [authLoading, setAuthLoading] = useState(true);
 
   // Configuration settings for Landing Page CTA and Tips (Requirement: Admin Landing Page Config)
@@ -118,8 +120,9 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       try {
         if (user) {
-          let role: 'admin' | 'biasa' = 'biasa';
+          let role: 'superadmin' | 'admin' | 'biasa' = 'biasa';
           let fullName = user.displayName || user.email?.split('@')[0] || 'Pengguna Google';
+          let assignedOrganizer = '';
           
           try {
             const userDocRef = doc(db, 'users', user.uid);
@@ -128,9 +131,10 @@ export default function App() {
               const userData = userDocSnap.data();
               role = userData.role || 'biasa';
               fullName = userData.fullName || fullName;
+              assignedOrganizer = userData.assignedOrganizer || '';
             } else {
               if (user.email === 'fathironmy4@gmail.com' || user.email === 'fathironmy@gmail.com') {
-                role = 'admin';
+                role = 'superadmin'; // Initialize original email as superadmin
               }
               await setDoc(userDocRef, {
                 fullName: fullName,
@@ -139,7 +143,7 @@ export default function App() {
                 createdAt: new Date().toISOString()
               });
 
-              if (role === 'admin') {
+              if (role === ('admin' as 'superadmin' | 'admin' | 'biasa') || role === 'superadmin') {
                 await setDoc(doc(db, 'admins', user.uid), {
                   email: user.email,
                   createdAt: new Date().toISOString()
@@ -151,13 +155,14 @@ export default function App() {
           }
 
           if (user.email === 'fathironmy4@gmail.com' || user.email === 'fathironmy@gmail.com') {
-            role = 'admin';
+            role = 'superadmin';
           }
 
           const enrichedUser = {
             fullName: fullName,
             email: user.email || '',
-            role: role
+            role: role,
+            assignedOrganizer: assignedOrganizer
           };
           setCurrentUser(enrichedUser);
           localStorage.setItem('sagatix_user', JSON.stringify(enrichedUser));
@@ -171,6 +176,22 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  // Fetch all users if current user is superadmin
+  useEffect(() => {
+    if (currentUser?.role === 'superadmin') {
+      const unsubscribe = onSnapshot(collection(db, 'users'), (snapshot) => {
+        const usersList: any[] = [];
+        snapshot.forEach((doc) => {
+          usersList.push({ id: doc.id, ...doc.data() });
+        });
+        setAllUsers(usersList);
+      }, (error) => {
+        console.error("Error fetching users:", error);
+      });
+      return () => unsubscribe();
+    }
+  }, [currentUser?.role]);
 
   // Real-time Firestore Sync for Events collection (and Seeding)
   useEffect(() => {
@@ -589,7 +610,7 @@ export default function App() {
                 </span>
               )}
             </button>
-            {currentUser?.role === 'admin' && (
+            {(currentUser?.role === 'admin' || currentUser?.role === 'superadmin') && (
               <button
                 onClick={() => {
                   setSelectedDetailsEvent(null);
@@ -926,7 +947,7 @@ export default function App() {
             </div>
 
             {/* Tombol Pembuatan Acara Kustom */}
-            {currentUser?.role === 'admin' && (
+            {(currentUser?.role === 'admin' || currentUser?.role === 'superadmin') && (
               <div className="pt-4 border-t border-outline-variant/40 space-y-2">
                 <button
                   onClick={() => setIsCreateModalOpen(true)}
@@ -1277,20 +1298,346 @@ export default function App() {
                   >
                     💻 REST API & Sandbox Hub
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setAdminSubTab('registrants')}
-                    className={`pb-2.5 px-1 border-b-2 transition-all cursor-pointer ${
-                      adminSubTab === 'registrants' ? 'border-primary text-primary font-black' : 'border-transparent text-on-surface-variant hover:text-on-surface'
-                    }`}
-                  >
-                    👥 Daftar Pendaftar & Ekspor
-                  </button>
+                  {currentUser?.role === 'superadmin' && (
+                    <button
+                      type="button"
+                      onClick={() => setAdminSubTab('users')}
+                      className={`pb-2.5 px-1 border-b-2 transition-all cursor-pointer ${
+                        adminSubTab === 'users' ? 'border-primary text-primary font-black' : 'border-transparent text-on-surface-variant hover:text-on-surface'
+                      }`}
+                    >
+                      👑 Kelola Akses & Pengguna
+                    </button>
+                  )}
                 </div>
+
+                {adminSubTab === 'users' && currentUser?.role === 'superadmin' && (
+                  <div className="space-y-6 text-left">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-outline-variant/60 pb-4">
+                      <div className="space-y-1">
+                        <h2 className="font-extrabold text-lg text-on-surface">Kelola Akses Pengguna & Organizer Resmi</h2>
+                        <p className="text-xs text-on-surface-variant">
+                          Halaman khusus Superadmin untuk mengatur peran (role) pengguna dan memberikan nama Organizer resmi untuk akun Admin.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="bg-surface-container rounded-3xl border border-outline-variant/80 overflow-hidden shadow-xs">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs text-left border-collapse">
+                          <thead>
+                            <tr className="bg-surface-container-high border-b border-outline-variant text-[10px] font-black uppercase text-on-surface-variant tracking-wider">
+                              <th className="px-4 py-3.5">Nama & Email</th>
+                              <th className="px-4 py-3.5">Peran (Role)</th>
+                              <th className="px-4 py-3.5">Organizer Resmi</th>
+                              <th className="px-4 py-3.5">Aksi</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-outline-variant/55">
+                            {allUsers.map((user) => (
+                              <tr key={user.id} className="hover:bg-surface-container-high transition-colors">
+                                <td className="px-4 py-3">
+                                  <div className="font-bold text-on-surface">{user.fullName}</div>
+                                  <div className="text-[10px] text-on-surface-variant">{user.email}</div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <select
+                                    value={user.role || 'biasa'}
+                                    onChange={async (e) => {
+                                      const newRole = e.target.value;
+                                      try {
+                                        await setDoc(doc(db, 'users', user.id), { role: newRole }, { merge: true });
+                                        triggerNotification(`Berhasil mengubah peran ${user.fullName} menjadi ${newRole.toUpperCase()}`);
+                                      } catch (err) {
+                                        console.error("Error updating role:", err);
+                                        triggerNotification("Gagal mengubah peran pengguna.");
+                                      }
+                                    }}
+                                    className="bg-surface border border-outline rounded px-2 py-1 outline-hidden font-semibold cursor-pointer"
+                                  >
+                                    <option value="biasa">👤 Biasa</option>
+                                    <option value="admin">🔑 Admin</option>
+                                    <option value="superadmin">👑 Superadmin</option>
+                                  </select>
+                                </td>
+                                <td className="px-4 py-3">
+                                  {user.role === 'admin' ? (
+                                    <input
+                                      type="text"
+                                      placeholder="Nama Organizer (EO)"
+                                      defaultValue={user.assignedOrganizer || ''}
+                                      onBlur={async (e) => {
+                                        const newOrg = e.target.value;
+                                        if (newOrg !== user.assignedOrganizer) {
+                                          try {
+                                            await setDoc(doc(db, 'users', user.id), { assignedOrganizer: newOrg }, { merge: true });
+                                            triggerNotification(`Organizer untuk ${user.fullName} disimpan.`);
+                                          } catch (err) {
+                                            console.error("Error updating organizer:", err);
+                                          }
+                                        }
+                                      }}
+                                      className="bg-surface border border-outline rounded px-2 py-1 outline-hidden text-xs w-full max-w-[150px]"
+                                    />
+                                  ) : (
+                                    <span className="text-[10px] text-on-surface-variant italic">Hanya untuk Admin</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <span className="text-[9px] text-on-surface-variant">Otomatis Tersimpan</span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {adminSubTab === 'events' && (
                   <div className="space-y-6">
-                    {selectedManageSeatsEvent ? (
+                    {selectedRegistrantsEvent ? (
+                      /* VIEW: DAFTAR PENDAFTAR EVENT */
+                      <div className="space-y-6 text-left">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-outline-variant/60 pb-4">
+                          <div className="space-y-1">
+                            <button
+                              onClick={() => {
+                                setSelectedRegistrantsEvent(null);
+                              }}
+                              className="text-xs text-primary font-bold hover:underline inline-flex items-center gap-1 cursor-pointer bg-transparent border-0"
+                            >
+                              ← Kembali ke Daftar Event
+                            </button>
+                            <h2 className="font-extrabold text-lg text-on-surface">Daftar Pendaftar & Ekspor CSV</h2>
+                            <p className="text-xs text-on-surface-variant">
+                              Acara: <strong className="text-on-surface">{selectedRegistrantsEvent.title}</strong>
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const getFieldLabel = (fieldId: string, eventId: string): string => {
+                                const event = events.find(e => e.id === eventId);
+                                if (!event) return fieldId;
+                                if (event.registrationRoles) {
+                                  for (const r of event.registrationRoles) {
+                                    if (r.formSections) {
+                                      for (const s of r.formSections) {
+                                        if (s.fields) {
+                                          const f = s.fields.find(field => field.id === fieldId);
+                                          if (f) return f.label;
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                                if (event.formSections) {
+                                  for (const s of event.formSections) {
+                                    if (s.fields) {
+                                      const f = s.fields.find(field => field.id === fieldId);
+                                      if (f) return f.label;
+                                    }
+                                  }
+                                }
+                                if (event.customFormFields) {
+                                  const f = event.customFormFields.find(field => field.id === fieldId);
+                                  if (f) return f.label;
+                                }
+                                return fieldId;
+                              };
+
+                              const eventTickets = purchasedTickets.filter(t => t.eventId === selectedRegistrantsEvent.id);
+
+                              if (eventTickets.length === 0) {
+                                triggerNotification("Belum ada data pendaftar untuk diekspor!");
+                                return;
+                              }
+
+                              // Header
+                              const headers = [
+                                'Kode Tiket',
+                                'Judul Event',
+                                'Nama Pendaftar Utama',
+                                'Kategori',
+                                'Kelas Tiket (Tier)',
+                                'Kuantitas',
+                                'Total Pembayaran',
+                                'Nomor Kursi',
+                                'Tanggal Booking',
+                                'Status Absensi',
+                                'Detail Jawaban Kustom'
+                              ];
+
+                              const rows = eventTickets.map(t => {
+                                const responses = t.formResponses || {};
+                                const attendeeName = responses['name'] || responses['name_lengkap'] || responses['nama'] || responses['nama_lengkap'] || responses['nama_kapten'] || 'PENGGUNA SAGATIX';
+
+                                const customDetails = Object.entries(responses)
+                                  .map(([fid, val]) => `${getFieldLabel(fid, t.eventId)}: ${val}`)
+                                  .join('; ');
+
+                                return [
+                                  t.ticketCode,
+                                  t.eventTitle,
+                                  attendeeName,
+                                  t.registrationType || 'N/A',
+                                  t.tierName,
+                                  t.quantity,
+                                  t.totalAmount,
+                                  (t.seatNumbers || []).join(', '),
+                                  t.bookingDate,
+                                  t.isCheckedIn ? 'Sudah Absen' : 'Belum Absen',
+                                  customDetails
+                                ];
+                              });
+
+                              const csvContent = [
+                                headers.join(','),
+                                ...rows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
+                              ].join('\n');
+
+                              const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                              const url = URL.createObjectURL(blob);
+                              const link = document.createElement('a');
+                              link.setAttribute('href', url);
+                              link.setAttribute('download', `Daftar_Pendaftar_${selectedRegistrantsEvent.title.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`);
+                              document.body.appendChild(link);
+                              link.click();
+                              document.body.removeChild(link);
+                              triggerNotification("Laporan CSV berhasil diunduh!");
+                            }}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-xs active:scale-95 shrink-0"
+                          >
+                            <Download className="w-4 h-4" />
+                            <span>Ekspor ke CSV</span>
+                          </button>
+                        </div>
+
+                        {/* Search & Filter Bar */}
+                        <div className="relative max-w-md">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant" />
+                          <input
+                            type="text"
+                            placeholder="Cari kode tiket, nama pendaftar..."
+                            value={registrantSearchQuery}
+                            onChange={(e) => setRegistrantSearchQuery(e.target.value)}
+                            className="w-full text-xs font-semibold bg-surface-container border border-outline-variant pl-9 pr-4 py-2.5 rounded-xl text-on-surface focus:border-primary outline-hidden"
+                          />
+                        </div>
+
+                        {/* Table View */}
+                        <div className="bg-surface-container rounded-3xl border border-outline-variant/80 overflow-hidden shadow-xs">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs text-left border-collapse">
+                              <thead>
+                                <tr className="bg-surface-container-high border-b border-outline-variant text-[10px] font-black uppercase text-on-surface-variant tracking-wider">
+                                  <th className="px-4 py-3.5">Kode Tiket</th>
+                                  <th className="px-4 py-3.5">Nama Pendaftar</th>
+                                  <th className="px-4 py-3.5">Kategori & Kelas</th>
+                                  <th className="px-4 py-3.5">Kursi</th>
+                                  <th className="px-4 py-3.5">Total Bayar</th>
+                                  <th className="px-4 py-3.5">Tanggal</th>
+                                  <th className="px-4 py-3.5">Absensi</th>
+                                  <th className="px-4 py-3.5">Detail Kustom</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-outline-variant/55">
+                                {(() => {
+                                  const getFieldLabel = (fieldId: string, eventId: string): string => {
+                                    const event = events.find(e => e.id === eventId);
+                                    if (!event) return fieldId;
+                                    if (event.registrationRoles) {
+                                      for (const r of event.registrationRoles) {
+                                        if (r.formSections) {
+                                          for (const s of r.formSections) {
+                                            if (s.fields) {
+                                              const f = s.fields.find(field => field.id === fieldId);
+                                              if (f) return f.label;
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                    if (event.formSections) {
+                                      for (const s of event.formSections) {
+                                        if (s.fields) {
+                                          const f = s.fields.find(field => field.id === fieldId);
+                                          if (f) return f.label;
+                                        }
+                                      }
+                                    }
+                                    if (event.customFormFields) {
+                                      const f = event.customFormFields.find(field => field.id === fieldId);
+                                      if (f) return f.label;
+                                    }
+                                    return fieldId;
+                                  };
+
+                                  const eventTickets = purchasedTickets.filter(t => t.eventId === selectedRegistrantsEvent.id);
+
+                                  const filtered = eventTickets.filter(t => {
+                                    const responses = t.formResponses || {};
+                                    const attendeeName = responses['name'] || responses['name_lengkap'] || responses['nama'] || responses['nama_lengkap'] || responses['nama_kapten'] || '';
+                                    const matchStr = `${t.ticketCode} ${attendeeName} ${t.registrationType} ${t.tierName}`.toLowerCase();
+                                    return matchStr.includes(registrantSearchQuery.toLowerCase());
+                                  });
+
+                                  if (filtered.length === 0) {
+                                    return (
+                                      <tr>
+                                        <td colSpan={8} className="px-4 py-8 text-center text-on-surface-variant italic font-semibold">
+                                          Tidak ada data pendaftaran yang sesuai dengan pencarian.
+                                        </td>
+                                      </tr>
+                                    );
+                                  }
+
+                                  return filtered.map((t) => {
+                                    const responses = t.formResponses || {};
+                                    const attendeeName = responses['name'] || responses['name_lengkap'] || responses['nama'] || responses['nama_lengkap'] || responses['nama_kapten'] || 'PENGGUNA SAGATIX';
+                                    return (
+                                      <tr key={t.id} className="hover:bg-surface-container-high transition-colors">
+                                        <td className="px-4 py-3 font-mono font-black text-primary">{t.ticketCode}</td>
+                                        <td className="px-4 py-3 font-bold text-on-surface">{attendeeName}</td>
+                                        <td className="px-4 py-3 space-y-0.5">
+                                          <div className="font-semibold text-on-surface">{t.registrationType || 'N/A'}</div>
+                                          <div className="text-[10px] text-on-surface-variant font-medium">{t.tierName} ({t.quantity} Slot)</div>
+                                        </td>
+                                        <td className="px-4 py-3 font-bold text-emerald-600">{t.seatNumbers?.join(', ') || '-'}</td>
+                                        <td className="px-4 py-3 font-black text-on-surface">
+                                          {new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(t.totalAmount)}
+                                        </td>
+                                        <td className="px-4 py-3 text-[10px] font-medium text-on-surface-variant">{t.bookingDate.split('T')[0]}</td>
+                                        <td className="px-4 py-3">
+                                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${
+                                            t.isCheckedIn
+                                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300'
+                                              : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+                                          }`}>
+                                            {t.isCheckedIn ? 'Sudah Absen' : 'Belum Absen'}
+                                          </span>
+                                        </td>
+                                        <td className="px-4 py-3 max-w-[200px]">
+                                          <div className="text-[10px] text-on-surface-variant space-y-0.5 max-h-16 overflow-y-auto no-scrollbar">
+                                            {Object.entries(responses).map(([fid, val]) => (
+                                              <div key={fid} className="truncate">
+                                                <strong className="font-bold text-[9px]">{getFieldLabel(fid, t.eventId)}:</strong> <span className="font-semibold">{val}</span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    );
+                                  });
+                                })()}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    ) : selectedManageSeatsEvent ? (
                       /* VIEW 1: MANAJEMEN SEATING/KURSI EVENT */
                       <div className="space-y-6 text-left">
                         {/* Seating Manager Header */}
@@ -1400,7 +1747,9 @@ export default function App() {
                                       title={tooltipText}
                                       onClick={async () => {
                                         if (isBooked) {
-                                          alert(`Kursi ini telah dipesan oleh pengguna: ${booking.formResponses.name || booking.userEmail} (${booking.ticketCode}). Pengubahan status diblokir.`);
+                                          const status = booking.isCheckedIn ? '✅ Sudah Absen (Hadir)' : '❌ Belum Absen';
+                                          const info = `🎫 INFORMASI KURSI BOOKED\n\nNomor Kursi: ${seatCode}\nNama: ${booking.formResponses.name || booking.userEmail}\nEmail Akun: ${booking.userEmail}\nKode Tiket: ${booking.ticketCode}\nStatus: ${status}\nWaktu Booking: ${booking.bookingDate}\n\n*Kursi ini tidak dapat diblokir karena sudah lunas dibeli pengguna.`;
+                                          alert(info);
                                           return;
                                         }
 
@@ -1533,6 +1882,14 @@ export default function App() {
                                       Kelola Kursi / Block
                                     </button>
                                     <button
+                                      onClick={() => {
+                                        setSelectedRegistrantsEvent(evt);
+                                      }}
+                                      className="bg-blue-100 border border-blue-200 hover:bg-blue-200 text-[10px] font-extrabold px-3 py-1.5 rounded-lg cursor-pointer transition-all text-blue-700"
+                                    >
+                                      Lihat Pendaftar
+                                    </button>
+                                    <button
                                       onClick={async () => {
                                         if (window.confirm(`Apakah Anda yakin ingin menghapus event "${evt.title}" secara permanen dari database? Semua penjualan tiket event ini juga akan ikut dinonaktifkan.`)) {
                                           try {
@@ -1584,10 +1941,6 @@ export default function App() {
 
                         {/* Camera display placeholder box */}
                         <div className="relative aspect-video rounded-2xl bg-black border border-white/5 overflow-hidden flex flex-col items-center justify-center text-center">
-                          {isAdminScanning && (
-                            <div className="absolute inset-x-0 top-0 h-1 bg-emerald-500 shadow-[0_0_15px_#10b981] animate-[bounce_1.2s_infinite] z-20" />
-                          )}
-
                           {isAdminScanning ? (
                             <div className="space-y-3 z-10">
                               <RefreshCw className="w-9 h-9 text-emerald-400 animate-spin mx-auto" />
@@ -1605,10 +1958,19 @@ export default function App() {
                               </div>
                             </kbd>
                           ) : (
-                            <div className="space-y-2 z-10 px-6">
-                              <QrCode className="w-14 h-14 text-white/20 mx-auto" />
-                              <p className="text-xs text-white/50 font-medium">Kamera Siap. Silakan klik tombol <strong className="text-primary-fixed">"Simulasi Pindai"</strong> pada salah satu tiket di sebelah kanan untuk absensi.</p>
-                            </div>
+                            <QRScanner
+                              onScanSuccess={(decodedText) => {
+                                const ticket = purchasedTickets.find(t => t.ticketCode === decodedText);
+                                if (ticket) {
+                                  handleSimulateAdminScan(ticket);
+                                } else {
+                                  triggerNotification(`Tiket dengan kode ${decodedText} tidak ditemukan!`);
+                                }
+                              }}
+                              onScanError={(err) => {
+                                // console.warn("QR Scan error:", err);
+                              }}
+                            />
                           )}
                         </div>
 
@@ -2473,237 +2835,6 @@ export default function App() {
                     </div>
                   </div>
                 )}
-
-                {adminSubTab === 'registrants' && (
-                  <div className="space-y-6 text-left">
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-outline-variant/60 pb-4">
-                      <div className="space-y-1">
-                        <h2 className="font-extrabold text-lg text-on-surface">Daftar Pendaftar & Ekspor CSV</h2>
-                        <p className="text-xs text-on-surface-variant">
-                          Melihat daftar seluruh transaksi pendaftaran, data kustom yang diisi, dan mengunduh laporan dalam format CSV.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const getFieldLabel = (fieldId: string, eventId: string): string => {
-                            const event = events.find(e => e.id === eventId);
-                            if (!event) return fieldId;
-                            if (event.registrationRoles) {
-                              for (const r of event.registrationRoles) {
-                                if (r.formSections) {
-                                  for (const s of r.formSections) {
-                                    if (s.fields) {
-                                      const f = s.fields.find(field => field.id === fieldId);
-                                      if (f) return f.label;
-                                    }
-                                  }
-                                }
-                              }
-                            }
-                            if (event.formSections) {
-                              for (const s of event.formSections) {
-                                if (s.fields) {
-                                  const f = s.fields.find(field => field.id === fieldId);
-                                  if (f) return f.label;
-                                }
-                              }
-                            }
-                            if (event.customFormFields) {
-                              const f = event.customFormFields.find(field => field.id === fieldId);
-                              if (f) return f.label;
-                            }
-                            return fieldId;
-                          };
-
-                          if (purchasedTickets.length === 0) {
-                            triggerNotification("Belum ada data pendaftar untuk diekspor!");
-                            return;
-                          }
-                          
-                          // Header
-                          const headers = [
-                            'Kode Tiket',
-                            'Judul Event',
-                            'Nama Pendaftar Utama',
-                            'Kategori',
-                            'Kelas Tiket (Tier)',
-                            'Kuantitas',
-                            'Total Pembayaran',
-                            'Nomor Kursi',
-                            'Tanggal Booking',
-                            'Status Absensi',
-                            'Detail Jawaban Kustom'
-                          ];
-                          
-                          const rows = purchasedTickets.map(t => {
-                            const responses = t.formResponses || {};
-                            const attendeeName = responses['name'] || responses['name_lengkap'] || responses['nama'] || responses['nama_lengkap'] || responses['nama_kapten'] || 'PENGGUNA SAGATIX';
-                            
-                            const customDetails = Object.entries(responses)
-                              .map(([fid, val]) => `${getFieldLabel(fid, t.eventId)}: ${val}`)
-                              .join('; ');
-                              
-                            return [
-                              t.ticketCode,
-                              t.eventTitle,
-                              attendeeName,
-                              t.registrationType || 'N/A',
-                              t.tierName,
-                              t.quantity,
-                              t.totalAmount,
-                              (t.seatNumbers || []).join(', '),
-                              t.bookingDate,
-                              t.isCheckedIn ? 'Sudah Absen' : 'Belum Absen',
-                              customDetails
-                            ];
-                          });
-                          
-                          const csvContent = [
-                            headers.join(','),
-                            ...rows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
-                          ].join('\n');
-                          
-                          const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-                          const url = URL.createObjectURL(blob);
-                          const link = document.createElement('a');
-                          link.setAttribute('href', url);
-                          link.setAttribute('download', `Daftar_Pendaftar_Sagatix_${new Date().toISOString().split('T')[0]}.csv`);
-                          document.body.appendChild(link);
-                          link.click();
-                          document.body.removeChild(link);
-                          triggerNotification("Laporan CSV berhasil diunduh!");
-                        }}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-xs active:scale-95 shrink-0"
-                      >
-                        <Download className="w-4 h-4" />
-                        <span>Ekspor ke CSV</span>
-                      </button>
-                    </div>
-
-                    {/* Search & Filter Bar */}
-                    <div className="relative max-w-md">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant" />
-                      <input
-                        type="text"
-                        placeholder="Cari kode tiket, nama pendaftar, atau judul event..."
-                        value={registrantSearchQuery}
-                        onChange={(e) => setRegistrantSearchQuery(e.target.value)}
-                        className="w-full text-xs font-semibold bg-surface-container border border-outline-variant pl-9 pr-4 py-2.5 rounded-xl text-on-surface focus:border-primary outline-hidden"
-                      />
-                    </div>
-
-                    {/* Table View */}
-                    <div className="bg-surface-container rounded-3xl border border-outline-variant/80 overflow-hidden shadow-xs">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs text-left border-collapse">
-                          <thead>
-                            <tr className="bg-surface-container-high border-b border-outline-variant text-[10px] font-black uppercase text-on-surface-variant tracking-wider">
-                              <th className="px-4 py-3.5">Kode Tiket</th>
-                              <th className="px-4 py-3.5">Event</th>
-                              <th className="px-4 py-3.5">Nama Pendaftar</th>
-                              <th className="px-4 py-3.5">Kategori & Kelas</th>
-                              <th className="px-4 py-3.5">Kursi</th>
-                              <th className="px-4 py-3.5">Total Bayar</th>
-                              <th className="px-4 py-3.5">Tanggal</th>
-                              <th className="px-4 py-3.5">Absensi</th>
-                              <th className="px-4 py-3.5">Detail Kustom</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-outline-variant/55">
-                            {(() => {
-                              const getFieldLabel = (fieldId: string, eventId: string): string => {
-                                const event = events.find(e => e.id === eventId);
-                                if (!event) return fieldId;
-                                if (event.registrationRoles) {
-                                  for (const r of event.registrationRoles) {
-                                    if (r.formSections) {
-                                      for (const s of r.formSections) {
-                                        if (s.fields) {
-                                          const f = s.fields.find(field => field.id === fieldId);
-                                          if (f) return f.label;
-                                        }
-                                      }
-                                    }
-                                  }
-                                }
-                                if (event.formSections) {
-                                  for (const s of event.formSections) {
-                                    if (s.fields) {
-                                      const f = s.fields.find(field => field.id === fieldId);
-                                      if (f) return f.label;
-                                    }
-                                  }
-                                }
-                                if (event.customFormFields) {
-                                  const f = event.customFormFields.find(field => field.id === fieldId);
-                                  if (f) return f.label;
-                                }
-                                return fieldId;
-                              };
-
-                              const filtered = purchasedTickets.filter(t => {
-                                const responses = t.formResponses || {};
-                                const attendeeName = responses['name'] || responses['name_lengkap'] || responses['nama'] || responses['nama_lengkap'] || responses['nama_kapten'] || '';
-                                const matchStr = `${t.ticketCode} ${t.eventTitle} ${attendeeName} ${t.registrationType} ${t.tierName}`.toLowerCase();
-                                return matchStr.includes(registrantSearchQuery.toLowerCase());
-                              });
-
-                              if (filtered.length === 0) {
-                                return (
-                                  <tr>
-                                    <td colSpan={9} className="px-4 py-8 text-center text-on-surface-variant italic font-semibold">
-                                      Tidak ada data pendaftaran yang sesuai dengan pencarian.
-                                    </td>
-                                  </tr>
-                                );
-                              }
-
-                              return filtered.map((t) => {
-                                const responses = t.formResponses || {};
-                                const attendeeName = responses['name'] || responses['name_lengkap'] || responses['nama'] || responses['nama_lengkap'] || responses['nama_kapten'] || 'PENGGUNA SAGATIX';
-                                return (
-                                  <tr key={t.id} className="hover:bg-surface-container-high transition-colors">
-                                    <td className="px-4 py-3 font-mono font-black text-primary">{t.ticketCode}</td>
-                                    <td className="px-4 py-3 font-extrabold max-w-[150px] truncate">{t.eventTitle}</td>
-                                    <td className="px-4 py-3 font-bold text-on-surface">{attendeeName}</td>
-                                    <td className="px-4 py-3 space-y-0.5">
-                                      <div className="font-semibold text-on-surface">{t.registrationType || 'N/A'}</div>
-                                      <div className="text-[10px] text-on-surface-variant font-medium">{t.tierName} ({t.quantity} Slot)</div>
-                                    </td>
-                                    <td className="px-4 py-3 font-bold text-emerald-600">{t.seatNumbers?.join(', ') || '-'}</td>
-                                    <td className="px-4 py-3 font-black text-on-surface">
-                                      {new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(t.totalAmount)}
-                                    </td>
-                                    <td className="px-4 py-3 text-[10px] font-medium text-on-surface-variant">{t.bookingDate.split('T')[0]}</td>
-                                    <td className="px-4 py-3">
-                                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${
-                                        t.isCheckedIn
-                                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300'
-                                          : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
-                                      }`}>
-                                        {t.isCheckedIn ? 'Sudah Absen' : 'Belum Absen'}
-                                      </span>
-                                    </td>
-                                    <td className="px-4 py-3 max-w-[200px]">
-                                      <div className="text-[10px] text-on-surface-variant space-y-0.5 max-h-16 overflow-y-auto no-scrollbar">
-                                        {Object.entries(responses).map(([fid, val]) => (
-                                          <div key={fid} className="truncate">
-                                            <strong className="font-bold text-[9px]">{getFieldLabel(fid, t.eventId)}:</strong> <span className="font-semibold">{val}</span>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </td>
-                                  </tr>
-                                );
-                              });
-                            })()}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                )}
               </motion.div>
             )}
 
@@ -2864,7 +2995,7 @@ export default function App() {
           )}
         </button>
 
-        {currentUser?.role === 'admin' && (
+        {(currentUser?.role === 'admin' || currentUser?.role === 'superadmin') && (
           <button
             onClick={() => setIsCreateModalOpen(true)}
             className="flex flex-col items-center justify-center cursor-pointer flex-1 -mt-5"
@@ -2876,7 +3007,7 @@ export default function App() {
           </button>
         )}
  
-        {currentUser?.role === 'admin' && (
+        {(currentUser?.role === 'admin' || currentUser?.role === 'superadmin') && (
           <button
             onClick={() => {
               setSelectedDetailsEvent(null);
@@ -2917,6 +3048,7 @@ export default function App() {
               setEventToEdit(null);
             }}
             onSaveEvent={handleSaveEvent}
+            currentUser={currentUser}
           />
         )}
 
