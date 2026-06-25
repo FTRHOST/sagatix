@@ -78,7 +78,7 @@ service cloud.firestore {
     // 2. TICKETS Match Block
     match /tickets/{ticketId} {
       // Owner or Admin read
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow read: if isSignedIn(); // allow all users to read tickets to prevent duplicate seats
       
       // Booking tickets
       allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidTicketCreate(incoming());
