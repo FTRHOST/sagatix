@@ -932,43 +932,19 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
                   </div>
 
                   <div className="space-y-4">
-                    <div className="space-y-1 text-xs text-left">
-                      <label className="font-extrabold text-on-surface-variant text-[10px]/normal uppercase tracking-wider block">Pilih Peran Akun Anda (Role)</label>
-                      <select
-                        value={authRole}
-                        onChange={(e) => setAuthRole(e.target.value as 'admin' | 'biasa')}
-                        className="w-full bg-slate-50 outline-hidden rounded-lg border border-outline-variant px-3 py-2 text-xs focus:ring-1 focus:ring-primary font-bold text-on-surface cursor-pointer"
-                      >
-                        <option value="biasa">👤 Pengguna Biasa (Pesan Tiket)</option>
-                        <option value="admin">🔑 Administrator (Kelola Event & Scanner)</option>
-                      </select>
-                    </div>
-
                     <button
                       type="button"
                       onClick={async () => {
                         try {
                           const user = await signInWithGoogle();
                           if (user) {
-                            await setDoc(doc(db, 'users', user.uid), {
-                              fullName: user.displayName || user.email?.split('@')[0] || 'User',
-                              email: user.email,
-                              role: authRole || 'biasa',
-                              createdAt: new Date().toISOString()
-                            });
-
-                            if (authRole === 'admin') {
-                              await setDoc(doc(db, 'admins', user.uid), {
-                                email: user.email,
-                                createdAt: new Date().toISOString()
-                              });
-                            }
-                            
-                            // Trigger callback
+                            // Note: Real app should not overwrite existing user roles on login.
+                            // The global auth state observer in App.tsx handles actual role synchronization.
+                            // We just notify the UI that login succeeded.
                             onLoginUser({
                               fullName: user.displayName || 'Google User',
                               email: user.email || '',
-                              role: authRole || 'biasa'
+                              role: 'biasa'
                             });
                             setAuthMode(null);
                             triggerNotification(`🔑 Login Google sukses! Halo ${user.displayName || user.email?.split('@')[0]}`);
@@ -1421,7 +1397,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
                         </p>
                       </div>
 
-                      <div className="space-y-3 max-h-56 overflow-y-auto no-scrollbar pr-1">
+                      <div className="space-y-3 pr-1">
                         <div className="bg-surface p-2.5 rounded-lg border border-outline-variant/50 text-[11px] text-on-surface-low font-bold">
                           👤 Tiket 1 (Pendaftar Utama): <span className="text-primary">{formResponses['name'] || 'Sesuai kontak pendaftar'}</span>
                         </div>
