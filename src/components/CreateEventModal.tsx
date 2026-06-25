@@ -42,6 +42,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const [title, setTitle] = useState(eventData?.title || '');
   const [category, setCategory] = useState<Category>(eventData?.category || 'Game');
   const [location, setLocation] = useState(eventData?.location || '');
+  const [mapsUrl, setMapsUrl] = useState(eventData?.mapsUrl || '');
   const [rawDate, setRawDate] = useState(eventData?.dateISO || '');
   const [timeStr, setTimeStr] = useState(
     eventData?.dateFullString?.split(', ').pop()?.split(' ')[0] || '15:00'
@@ -76,6 +77,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
         if (draft.title !== undefined) setTitle(draft.title);
         if (draft.category !== undefined) setCategory(draft.category);
         if (draft.location !== undefined) setLocation(draft.location);
+        if (draft.mapsUrl !== undefined) setMapsUrl(draft.mapsUrl);
         if (draft.rawDate !== undefined) setRawDate(draft.rawDate);
         if (draft.timeStr !== undefined) setTimeStr(draft.timeStr);
         if (draft.description !== undefined) setDescription(draft.description);
@@ -330,13 +332,13 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
     const timer = setTimeout(() => {
       if (title || location || description || organizer || tiers.length > 0 || roles.length > 0) {
         const draft = {
-          title, category, location, rawDate, timeStr, description, organizer, customBannerUrl, tag, regOpenDate, regOpenTime, tiers, roles, contentBlocks, selectedSeatingPlan, customSeatingUrl
+          title, category, location, mapsUrl, rawDate, timeStr, description, organizer, customBannerUrl, tag, regOpenDate, regOpenTime, tiers, roles, contentBlocks, selectedSeatingPlan, customSeatingUrl
         };
         localStorage.setItem('sagatix_create_event_draft', JSON.stringify(draft));
       }
     }, 1000); // 1 second debounce
     return () => clearTimeout(timer);
-  }, [title, category, location, rawDate, timeStr, description, organizer, customBannerUrl, tag, regOpenDate, regOpenTime, tiers, roles, contentBlocks, selectedSeatingPlan, customSeatingUrl, eventData]);
+  }, [title, category, location, mapsUrl, rawDate, timeStr, description, organizer, customBannerUrl, tag, regOpenDate, regOpenTime, tiers, roles, contentBlocks, selectedSeatingPlan, customSeatingUrl, eventData]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -402,6 +404,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       dateFullString,
       dateISO: rawDate,
       location,
+      mapsUrl: mapsUrl || undefined,
       priceMin,
       priceMax,
       imageUrl: customBannerUrl || CATEGORY_BANNER_PRESETS[category],
@@ -471,9 +474,10 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
         </div>
 
         {/* Isi Formulir */}
-        <form onSubmit={handleSubmit} className="p-6 overflow-y-auto no-scrollbar space-y-7 text-xs">
-          
-          {hasDraft && (
+        <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
+          <div className="p-6 overflow-y-auto no-scrollbar space-y-7 text-xs flex-1">
+
+            {hasDraft && (
             <div className="bg-primary/10 border border-primary/20 rounded-xl p-3.5 flex items-center justify-between text-xs mb-4">
               <div className="space-y-0.5 text-left">
                 <span className="font-extrabold text-primary block">Draf Pembuatan Acara Ditemukan!</span>
@@ -574,19 +578,32 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
               </div>
             </div>
 
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-on-surface-variant block uppercase tracking-wider">Lokasi Fisik / Venue Stadium *</label>
-              <input
-                type="text"
-                required
-                placeholder="Contoh: Istora Senayan, Jakarta / ICE BSD"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                className="w-full bg-surface-container outline-hidden rounded-xl border border-outline px-4 py-2.5 text-xs focus:ring-1 focus:ring-primary text-on-surface font-semibold"
-              />
-              {validationErrors.location && (
-                <p className="text-red-500 text-[10px] font-bold mt-1 text-left">{validationErrors.location}</p>
-              )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-on-surface-variant block uppercase tracking-wider">Lokasi Fisik / Venue Stadium *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Contoh: Istora Senayan, Jakarta / ICE BSD"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  className="w-full bg-surface-container outline-hidden rounded-xl border border-outline px-4 py-2.5 text-xs focus:ring-1 focus:ring-primary text-on-surface font-semibold"
+                />
+                {validationErrors.location && (
+                  <p className="text-red-500 text-[10px] font-bold mt-1 text-left">{validationErrors.location}</p>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-on-surface-variant block uppercase tracking-wider">Tautan Google Maps Kustom (Opsional)</label>
+                <input
+                  type="url"
+                  placeholder="https://maps.google.com/..."
+                  value={mapsUrl}
+                  onChange={(e) => setMapsUrl(e.target.value)}
+                  className="w-full bg-surface-container outline-hidden rounded-xl border border-outline px-4 py-2.5 text-xs focus:ring-1 focus:ring-primary text-on-surface font-medium"
+                />
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1286,8 +1303,10 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
             />
           </div>
 
+          </div>
+
           {/* FOOTER ACTION BUTTONS */}
-          <div className="pt-4 flex justify-end gap-3 sticky bottom-0 bg-surface py-3 border-t border-outline-variant shrink-0">
+          <div className="px-6 py-4 flex justify-end gap-3 bg-surface border-t border-outline-variant shrink-0">
             <button
               type="button"
               onClick={onClose}
@@ -1303,7 +1322,6 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
               <span>Publikasikan Acara</span>
             </button>
           </div>
-
         </form>
       </motion.div>
 

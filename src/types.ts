@@ -51,6 +51,7 @@ export interface Event {
   dateFullString: string; // e.g. "Sabtu, 24 Okt 2026, 20:00"
   dateISO: string; // e.g. "2026-10-24"
   location: string;
+  mapsUrl?: string; // Custom Google Maps URL
   priceMin: number;
   priceMax: number;
   imageUrl: string;

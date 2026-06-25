@@ -782,7 +782,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
                 <MapPin className="w-3.5 h-3.5 text-primary-fixed" />
                 <span>{event.location}</span>
                 <a
-                  href={`https://maps.google.com/?q=${encodeURIComponent(event.location)}`}
+                  href={event.mapsUrl || `https://maps.google.com/?q=${encodeURIComponent(event.location)}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="ml-1 text-[10px] bg-primary/20 text-primary-fixed hover:bg-primary/40 px-2 py-0.5 rounded-full transition-colors flex items-center gap-1 border border-primary/30"
