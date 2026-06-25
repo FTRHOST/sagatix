@@ -72,13 +72,13 @@ service cloud.firestore {
 
     function isValidEventDecrement(data) {
       return data.id is string && data.title is string
-        && incoming().diff(existing()).affectedKeys().hasAny(['ticketsLeft', 'isSoldOut', 'tiers', 'simulatedRequestsCount', 'registrationOpenTime']);
+        && incoming().diff(existing()).affectedKeys().hasAny(['ticketsLeft', 'isSoldOut', 'tiers', 'simulatedRequestsCount', 'registrationOpenTime', 'bookedSeats']);
     }
 
     // 2. TICKETS Match Block
     match /tickets/{ticketId} {
       // Owner or Admin read
-      allow read: if isSignedIn(); // allow all users to read tickets to prevent duplicate seats
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       
       // Booking tickets
       allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidTicketCreate(incoming());

@@ -67,6 +67,7 @@ export interface Event {
   customFormFields: CustomFieldDefinition[]; // Legacy fallback
   registrationOpenTime?: string; // ISO String (e.g., "2026-06-22T11:30:00Z")
   simulatedRequestsCount?: number; // Simulated active viewers to test bandwidth queuing
+  bookedSeats?: string[]; // Array of booked seat codes to prevent duplication
 }
 
 export interface LandingPageConfig {

@@ -189,6 +189,30 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
     );
   };
 
+  const handleMoveField = (secId: string, fieldIdx: number, direction: 'up' | 'down') => {
+    setActiveRoleSections(prev =>
+      prev.map(sec => {
+        if (sec.id === secId) {
+          const newFields = [...sec.fields];
+          if (direction === 'up' && fieldIdx > 0) {
+            const temp = newFields[fieldIdx];
+            newFields[fieldIdx] = newFields[fieldIdx - 1];
+            newFields[fieldIdx - 1] = temp;
+          } else if (direction === 'down' && fieldIdx < newFields.length - 1) {
+            const temp = newFields[fieldIdx];
+            newFields[fieldIdx] = newFields[fieldIdx + 1];
+            newFields[fieldIdx + 1] = temp;
+          }
+          return {
+            ...sec,
+            fields: newFields
+          };
+        }
+        return sec;
+      })
+    );
+  };
+
   const [newSectionTitle, setNewSectionTitle] = useState('');
 
   // Fields to append to a section
@@ -811,8 +835,19 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                   <div>
                     <span className="font-extrabold text-on-surface text-xs block">{tier.name}</span>
                     <span className="text-[10px] text-on-surface-variant block">{tier.description}</span>
-                    <span className="text-[10px] text-primary font-black mt-1 block">
-                      Harga: Rp {tier.price.toLocaleString('id-ID')} | Kuota: {tier.slotsAvailable} Pendaftar
+                    <span className="text-[10px] text-primary font-black mt-1 flex items-center gap-2">
+                      <span>Harga: Rp {tier.price.toLocaleString('id-ID')} | Kuota:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        value={tier.slotsAvailable}
+                        onChange={(e) => {
+                          const newSlots = Math.max(1, parseInt(e.target.value) || 1);
+                          setTiers(tiers.map(t => t.id === tier.id ? { ...t, slotsAvailable: newSlots } : t));
+                        }}
+                        className="w-16 bg-surface border border-outline rounded px-1.5 py-0.5 outline-hidden text-center font-black"
+                      />
+                      <span>Pendaftar</span>
                     </span>
                   </div>
                   <button
@@ -948,18 +983,38 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                           Belum ada pertanyaan isian di section ini. Gunakan form tambah field di bawah.
                         </div>
                       ) : (
-                        sec.fields.map(f => (
+                        sec.fields.map((f, fIdx) => (
                           <div key={f.id} className="flex justify-between bg-surface-container px-2.5 py-1 text-[10px] rounded border border-outline-variant/30 font-medium">
                             <span>
                               📝 {f.label} ({f.type}) {f.required && <span className="text-red-500 font-black">*</span>}
                             </span>
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveFieldFromSection(sec.id, f.id)}
-                              className="text-on-surface-variant hover:text-red-500"
-                            >
-                              x
-                            </button>
+                            <div className="flex gap-2 items-center">
+                              <button
+                                type="button"
+                                disabled={fIdx === 0}
+                                onClick={() => handleMoveField(sec.id, fIdx, 'up')}
+                                className="text-on-surface-variant hover:text-primary disabled:opacity-30 disabled:cursor-not-allowed text-[10px]"
+                                title="Geser ke atas"
+                              >
+                                ▲
+                              </button>
+                              <button
+                                type="button"
+                                disabled={fIdx === sec.fields.length - 1}
+                                onClick={() => handleMoveField(sec.id, fIdx, 'down')}
+                                className="text-on-surface-variant hover:text-primary disabled:opacity-30 disabled:cursor-not-allowed text-[10px]"
+                                title="Geser ke bawah"
+                              >
+                                ▼
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveFieldFromSection(sec.id, f.id)}
+                                className="text-on-surface-variant hover:text-red-500 font-bold ml-1"
+                              >
+                                x
+                              </button>
+                            </div>
                           </div>
                         ))
                       )}

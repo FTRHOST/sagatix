@@ -275,6 +275,58 @@ export default function App() {
 
   // Pengaturan overlay & modal
   const [selectedDetailsEvent, setSelectedDetailsEvent] = useState<Event | null>(null);
+
+  // Hash-based Routing (Sync state to URL Hash)
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.replace('#', '');
+      if (hash.startsWith('/event/')) {
+        const eventId = hash.replace('/event/', '');
+        const found = events.find(e => e.id === eventId);
+        if (found) {
+          setSelectedDetailsEvent(found);
+        }
+      } else if (hash.startsWith('/tab/')) {
+        setSelectedDetailsEvent(null);
+        const tab = hash.replace('/tab/', '');
+        if (tab.includes('/')) {
+          const [mainTab, subTab] = tab.split('/');
+          if (['explore', 'tickets', 'help', 'admin'].includes(mainTab)) {
+            setActiveTab(mainTab as any);
+          }
+          if (mainTab === 'admin' && ['scanner', 'config', 'sandbox', 'events', 'users'].includes(subTab)) {
+            setAdminSubTab(subTab as any);
+          }
+        } else {
+          if (['explore', 'tickets', 'help', 'admin'].includes(tab)) {
+            setActiveTab(tab as any);
+          }
+        }
+      } else if (!hash) {
+        setSelectedDetailsEvent(null);
+        setActiveTab('explore');
+      }
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    // Initial load
+    if (events.length > 0) {
+      handleHashChange();
+    }
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [events]);
+
+  useEffect(() => {
+    if (selectedDetailsEvent) {
+      window.history.replaceState(null, '', `#/event/${selectedDetailsEvent.id}`);
+    } else {
+      if (activeTab === 'admin') {
+        window.history.replaceState(null, '', `#/tab/admin/${adminSubTab}`);
+      } else {
+        window.history.replaceState(null, '', `#/tab/${activeTab}`);
+      }
+    }
+  }, [selectedDetailsEvent, activeTab, adminSubTab]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [notificationMsg, setNotificationMsg] = useState<string | null>(null);
 
@@ -441,7 +493,8 @@ export default function App() {
         await updateDoc(doc(db, 'events', newTicket.eventId), {
           ticketsLeft: updatedLeft,
           tiers: updatedTiers,
-          isSoldOut: updatedLeft === 0 ? true : (targetEvent.isSoldOut || false)
+          isSoldOut: updatedLeft === 0 ? true : (targetEvent.isSoldOut || false),
+          bookedSeats: [...(targetEvent.bookedSeats || []), ...newTicket.seatNumbers]
         });
       }
     } catch (error) {
@@ -666,23 +719,12 @@ export default function App() {
                 </div>
                 <div className="hidden md:block text-left mr-1">
                   <span className="font-extrabold text-[#111111] block leading-none">{currentUser.fullName}</span>
-                  <span className="text-[8.5px] font-black text-primary block mt-1 tracking-wider uppercase">ROLE: {currentUser.role || 'BIASA'}</span>
+                  {currentUser.role === 'superadmin' && (
+                    <span className="text-[8.5px] font-black text-primary block mt-1 tracking-wider uppercase">ROLE: {currentUser.role || 'BIASA'}</span>
+                  )}
                   <span className="text-[9px] text-on-surface-variant font-medium leading-none block mt-0.5">{currentUser.email}</span>
                 </div>
                 <div className="flex flex-col gap-1">
-                  {currentUser.role === 'superadmin' ? (
-                    <span className="text-[9.5px] font-extrabold bg-surface text-on-surface border border-outline rounded px-1.5 py-0.5 outline-hidden text-center cursor-default">
-                      👑 SUPERADMIN
-                    </span>
-                  ) : currentUser.role === 'admin' ? (
-                    <span className="text-[9.5px] font-extrabold bg-surface text-on-surface border border-outline rounded px-1.5 py-0.5 outline-hidden text-center cursor-default">
-                      🔑 ADMIN
-                    </span>
-                  ) : (
-                    <span className="text-[9.5px] font-extrabold bg-surface text-on-surface border border-outline rounded px-1.5 py-0.5 outline-hidden text-center cursor-default">
-                      👤 BIASA
-                    </span>
-                  )}
                   <button
                     onClick={handleLogout}
                     className="text-[8px] bg-red-100 hover:bg-red-200 text-red-700 font-extrabold px-1.5 py-0.5 rounded cursor-pointer transition-colors text-center"
@@ -1209,7 +1251,7 @@ export default function App() {
                 exit={{ opacity: 0, y: -15 }}
               >
                 <MyTicketsView
-                  tickets={purchasedTickets}
+                  tickets={purchasedTickets.filter(t => t.userId === auth.currentUser?.uid)}
                   onExploreClick={() => setActiveTab('explore')}
                   events={events}
                 />
@@ -1678,7 +1720,27 @@ export default function App() {
                           );
 
                           // Create array of seat numbers from 1 to slotsAvailable (capacity)
-                          const totalSeats = activeTier.slotsAvailable;
+                          // Note: originally totalSeats was just slotsAvailable. But slotsAvailable DECREASES as people buy tickets!
+                          // So total capacity is slotsAvailable + booked count. Wait!
+                          // actually, earlier logic says "Array.from({ length: totalSeats })" and uses `slotsAvailable` directly!
+                          // That means the grid shrinks! This is a bug from previous code.
+                          // But let's fix it by adding booked seats, so the grid size remains constant = total capacity.
+                          const bookedCount = activeTierTickets.filter(t => t.userId !== 'admin-blocked').reduce((acc, t) => acc + (t.seatNumbers?.length || 1), 0);
+                          const blockedCount = activeTierTickets.filter(t => t.userId === 'admin-blocked').length;
+                          const availableCount = activeTier.slotsAvailable;
+                          const totalCapacity = availableCount + bookedCount; // Since Blocked also decrements quota?
+
+                          // actually, let's keep totalSeats as availableCount + bookedCount + blockedCount?
+                          // In the original block logic, blocking a seat DID NOT decrement slotsAvailable.
+                          // Deleting a user booking increments slotsAvailable.
+                          // So the absolute grid size is slotsAvailable + bookedCount + blockedCount? No, booking a ticket decrements ticketsLeft and slotsAvailable. So the true fixed capacity is slotsAvailable (current free) + tickets booked.
+                          // If admin blocked it, they just made a fake ticket, which ALSO decremented nothing (totalAmount 0, quantity 1, but we didn't decrement tier!). Wait, block logic:
+                          // `await setDoc(doc(db, 'tickets', blockId), ...)`
+                          // It just adds a ticket. It does NOT decrement `slotsAvailable`.
+                          // So if user books, `slotsAvailable` drops.
+                          // Thus, total capacity of the grid = slotsAvailable + bookedCount. Blocked seats are just tickets, but they didn't reduce `slotsAvailable`!
+                          // To keep grid size stable, we must calculate original slots:
+                          const totalSeats = activeTier.slotsAvailable + bookedCount;
 
                           return (
                             <div className="bg-surface-container rounded-3xl p-6 border border-outline-variant space-y-6">
@@ -1688,9 +1750,9 @@ export default function App() {
                                   <span className="text-[10px] text-on-surface-variant font-semibold">Total Kapasitas: {totalSeats} Kursi | Klik kursi untuk Memblokir atau Membebaskan</span>
                                 </div>
                                 <div className="flex items-center gap-3 text-[10px] font-bold">
-                                  <div className="flex items-center gap-1.5"><span className="w-3.5 h-3.5 rounded-sm bg-emerald-500 border border-emerald-600 block"></span> Tersedia</div>
-                                  <div className="flex items-center gap-1.5"><span className="w-3.5 h-3.5 rounded-sm bg-red-500 border border-red-600 block"></span> Booked (User)</div>
-                                  <div className="flex items-center gap-1.5"><span className="w-3.5 h-3.5 rounded-sm bg-slate-700 border border-slate-800 block"></span> Blocked (Admin)</div>
+                                  <div className="flex items-center gap-1.5"><span className="w-3.5 h-3.5 rounded-sm bg-emerald-500 border border-emerald-600 block"></span> Tersedia ({availableCount - blockedCount})</div>
+                                  <div className="flex items-center gap-1.5"><span className="w-3.5 h-3.5 rounded-sm bg-red-500 border border-red-600 block"></span> Booked ({bookedCount})</div>
+                                  <div className="flex items-center gap-1.5"><span className="w-3.5 h-3.5 rounded-sm bg-slate-700 border border-slate-800 block"></span> Blocked ({blockedCount})</div>
                                 </div>
                               </div>
 
@@ -1724,8 +1786,35 @@ export default function App() {
                                       onClick={async () => {
                                         if (isBooked) {
                                           const status = booking.isCheckedIn ? '✅ Sudah Absen (Hadir)' : '❌ Belum Absen';
-                                          const info = `🎫 INFORMASI KURSI BOOKED\n\nNomor Kursi: ${seatCode}\nNama: ${booking.formResponses.name || booking.userEmail}\nEmail Akun: ${booking.userEmail}\nKode Tiket: ${booking.ticketCode}\nStatus: ${status}\nWaktu Booking: ${booking.bookingDate}\n\n*Kursi ini tidak dapat diblokir karena sudah lunas dibeli pengguna.`;
-                                          alert(info);
+                                          const info = `🎫 INFORMASI KURSI BOOKED\n\nNomor Kursi: ${seatCode}\nNama: ${booking.formResponses.name || booking.userEmail}\nEmail Akun: ${booking.userEmail}\nKode Tiket: ${booking.ticketCode}\nStatus: ${status}\nWaktu Booking: ${booking.bookingDate}\n\nApakah Anda ingin membatalkan/menghapus tiket pengguna ini dan mengembalikan kuota kursinya?`;
+                                          if (window.confirm(info)) {
+                                            try {
+                                              await deleteDoc(doc(db, 'tickets', booking.id));
+
+                                              // Restore quota logic
+                                              const targetEvent = events.find(e => e.id === selectedManageSeatsEvent.id);
+                                              if (targetEvent) {
+                                                const updatedLeft = targetEvent.ticketsLeft !== undefined ? targetEvent.ticketsLeft + booking.quantity : undefined;
+                                                const updatedTiers = targetEvent.tiers.map(t => {
+                                                  if (t.name === booking.tierName) {
+                                                    return { ...t, slotsAvailable: t.slotsAvailable + booking.quantity };
+                                                  }
+                                                  return t;
+                                                });
+                                                await updateDoc(doc(db, 'events', targetEvent.id), {
+                                                  ticketsLeft: updatedLeft,
+                                                  tiers: updatedTiers,
+                                                  isSoldOut: false,
+                                                  bookedSeats: (targetEvent.bookedSeats || []).filter(s => !(booking.seatNumbers || []).includes(s))
+                                                });
+                                              }
+
+                                              triggerNotification(`Tiket ${booking.ticketCode} dibatalkan dan kuota kursi dikembalikan.`);
+                                            } catch (err) {
+                                              console.error("Failed to delete user ticket", err);
+                                              triggerNotification("Gagal menghapus tiket.");
+                                            }
+                                          }
                                           return;
                                         }
 
@@ -1734,6 +1823,14 @@ export default function App() {
                                           if (window.confirm(`Apakah Anda yakin ingin membebaskan kembali kursi ${seatCode}?`)) {
                                             try {
                                               await deleteDoc(doc(db, 'tickets', booking.id));
+
+                                              // Remove from bookedSeats
+                                              const targetEvent = events.find(e => e.id === selectedManageSeatsEvent.id);
+                                              if (targetEvent) {
+                                                await updateDoc(doc(db, 'events', targetEvent.id), {
+                                                  bookedSeats: (targetEvent.bookedSeats || []).filter(s => s !== seatCode)
+                                                });
+                                              }
                                               triggerNotification(`Kursi ${seatCode} dibebaskan.`);
                                             } catch (err) {
                                               console.error("Failed to unblock seat", err);
@@ -1765,6 +1862,14 @@ export default function App() {
                                                 seatNumbers: [seatCode],
                                                 isCheckedIn: false
                                               });
+
+                                              // Add to bookedSeats to prevent regular users from reserving it
+                                              const targetEvent = events.find(e => e.id === selectedManageSeatsEvent.id);
+                                              if (targetEvent) {
+                                                await updateDoc(doc(db, 'events', targetEvent.id), {
+                                                  bookedSeats: [...(targetEvent.bookedSeats || []), seatCode]
+                                                });
+                                              }
                                               triggerNotification(`Kursi ${seatCode} berhasil diblokir.`);
                                             } catch (err) {
                                               console.error("Failed to block seat", err);

@@ -454,32 +454,8 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
     };
     const seatPrefix = getSeatPrefix(selectedTier.name);
     
-    // Find all currently booked/blocked seat numbers for this event and tier by fetching explicitly
-    const bookedSeatCodes = new Set<string>();
-    try {
-      const q = query(
-        collection(db, 'tickets'),
-        where('eventId', '==', event.id),
-        where('tierName', '==', selectedTier.name)
-      );
-      const snapshot = await getDocs(q);
-      snapshot.forEach(doc => {
-        const t = doc.data() as PurchasedTicket;
-        if (t.seatNumbers) {
-          t.seatNumbers.forEach((s: string) => bookedSeatCodes.add(s));
-        }
-      });
-    } catch (e) {
-      console.error("Failed to explicitly fetch seats", e);
-      // Fallback to local tickets array if offline/error
-      if (tickets) {
-        tickets.forEach((t) => {
-          if (t.eventId === event.id && t.tierName === selectedTier.name && t.seatNumbers) {
-            t.seatNumbers.forEach((s) => bookedSeatCodes.add(s));
-          }
-        });
-      }
-    }
+    // Find all currently booked/blocked seat numbers for this event and tier using event's bookedSeats array
+    const bookedSeatCodes = new Set<string>(event.bookedSeats || []);
 
     const seatNumbersArray: string[] = [];
     let currentNum = 1;
@@ -805,6 +781,14 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({
               <div className="flex items-center gap-1.5">
                 <MapPin className="w-3.5 h-3.5 text-primary-fixed" />
                 <span>{event.location}</span>
+                <a
+                  href={`https://maps.google.com/?q=${encodeURIComponent(event.location)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ml-1 text-[10px] bg-primary/20 text-primary-fixed hover:bg-primary/40 px-2 py-0.5 rounded-full transition-colors flex items-center gap-1 border border-primary/30"
+                >
+                  Buka Map ↗
+                </a>
               </div>
               <div className="flex items-center gap-1.5">
                 <Calendar className="w-3.5 h-3.5 text-primary-fixed" />
