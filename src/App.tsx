@@ -230,7 +230,7 @@ export default function App() {
     if (!firebaseUser) return;
 
     let q;
-    if (currentUser.role === 'admin') {
+    if (currentUser.role === 'admin' || currentUser.role === 'superadmin') {
       q = collection(db, 'tickets');
     } else {
       q = query(collection(db, 'tickets'), where('userId', '==', firebaseUser.uid));
@@ -670,43 +670,19 @@ export default function App() {
                   <span className="text-[9px] text-on-surface-variant font-medium leading-none block mt-0.5">{currentUser.email}</span>
                 </div>
                 <div className="flex flex-col gap-1">
-                  <select
-                    value={currentUser.role || 'biasa'}
-                    onChange={async (e) => {
-                      const selectedRole = e.target.value as 'admin' | 'biasa';
-                      const firebaseUser = auth.currentUser;
-                      if (firebaseUser) {
-                        try {
-                          await setDoc(doc(db, 'users', firebaseUser.uid), {
-                            fullName: currentUser.fullName,
-                            email: currentUser.email,
-                            role: selectedRole,
-                            updatedAt: new Date().toISOString()
-                          }, { merge: true });
-
-                          if (selectedRole === 'admin') {
-                            await setDoc(doc(db, 'admins', firebaseUser.uid), {
-                              email: firebaseUser.email,
-                              createdAt: new Date().toISOString()
-                            });
-                          }
-                          
-                          triggerNotification(`Peran berhasil disimpan ke Firebase: ${selectedRole.toUpperCase()}`);
-                          if (selectedRole === 'biasa' && (activeTab === 'admin')) {
-                            setSelectedDetailsEvent(null);
-                            setActiveTab('explore');
-                          }
-                        } catch (err) {
-                          console.error("Gagal memperbarui peran di Firebase:", err);
-                          triggerNotification("Gagal memperbarui peran di Firebase");
-                        }
-                      }
-                    }}
-                    className="text-[9.5px] font-extrabold bg-surface text-on-surface hover:bg-slate-50 border border-outline rounded px-1.5 py-0.5 cursor-pointer outline-hidden transition-all"
-                  >
-                    <option value="biasa">👤 BIASA</option>
-                    <option value="admin">🔑 ADMIN</option>
-                  </select>
+                  {currentUser.role === 'superadmin' ? (
+                    <span className="text-[9.5px] font-extrabold bg-surface text-on-surface border border-outline rounded px-1.5 py-0.5 outline-hidden text-center cursor-default">
+                      👑 SUPERADMIN
+                    </span>
+                  ) : currentUser.role === 'admin' ? (
+                    <span className="text-[9.5px] font-extrabold bg-surface text-on-surface border border-outline rounded px-1.5 py-0.5 outline-hidden text-center cursor-default">
+                      🔑 ADMIN
+                    </span>
+                  ) : (
+                    <span className="text-[9.5px] font-extrabold bg-surface text-on-surface border border-outline rounded px-1.5 py-0.5 outline-hidden text-center cursor-default">
+                      👤 BIASA
+                    </span>
+                  )}
                   <button
                     onClick={handleLogout}
                     className="text-[8px] bg-red-100 hover:bg-red-200 text-red-700 font-extrabold px-1.5 py-0.5 rounded cursor-pointer transition-colors text-center"
@@ -1728,14 +1704,14 @@ export default function App() {
                                   const isBlocked = booking?.userId === 'admin-blocked';
                                   const isBooked = !!booking && !isBlocked;
 
-                                  let bgColor = "bg-emerald-500 hover:bg-emerald-600 text-white border-emerald-600";
+                                  let bgColor = "bg-emerald-500 hover:bg-emerald-600 text-white border-emerald-600"; // Tersedia
                                   let tooltipText = `Kursi ${seatCode} (Tersedia)`;
 
                                   if (isBlocked) {
                                     bgColor = "bg-slate-700 hover:bg-slate-800 text-slate-200 border-slate-800";
                                     tooltipText = `Kursi ${seatCode} (Diblock oleh Admin)`;
                                   } else if (isBooked) {
-                                    bgColor = "bg-red-500 text-white border-red-600 cursor-not-allowed";
+                                    bgColor = (currentUser?.role === 'superadmin' && booking?.userId === currentUser?.id) ? "bg-emerald-500 hover:bg-emerald-600 text-white border-emerald-600" : "bg-red-500 text-white border-red-600 cursor-not-allowed";
                                     const buyerName = booking.formResponses.name || booking.userEmail || "Pembeli";
                                     tooltipText = `Kursi ${seatCode} (Booked: ${buyerName})`;
                                   }
