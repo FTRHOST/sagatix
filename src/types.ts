@@ -51,6 +51,7 @@ export interface Event {
   dateFullString: string; // e.g. "Sabtu, 24 Okt 2026, 20:00"
   dateISO: string; // e.g. "2026-10-24"
   location: string;
+  mapsUrl?: string; // Custom Google Maps URL
   priceMin: number;
   priceMax: number;
   imageUrl: string;
@@ -67,6 +68,7 @@ export interface Event {
   customFormFields: CustomFieldDefinition[]; // Legacy fallback
   registrationOpenTime?: string; // ISO String (e.g., "2026-06-22T11:30:00Z")
   simulatedRequestsCount?: number; // Simulated active viewers to test bandwidth queuing
+  bookedSeats?: string[]; // Array of booked seat codes to prevent duplication
 }
 
 export interface LandingPageConfig {

@@ -72,7 +72,7 @@ service cloud.firestore {
 
     function isValidEventDecrement(data) {
       return data.id is string && data.title is string
-        && incoming().diff(existing()).affectedKeys().hasAny(['ticketsLeft', 'isSoldOut', 'tiers', 'simulatedRequestsCount', 'registrationOpenTime']);
+        && incoming().diff(existing()).affectedKeys().hasAny(['ticketsLeft', 'isSoldOut', 'tiers', 'simulatedRequestsCount', 'registrationOpenTime', 'bookedSeats']);
     }
 
     // 2. TICKETS Match Block

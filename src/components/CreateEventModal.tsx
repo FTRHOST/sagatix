@@ -7,6 +7,7 @@ interface CreateEventModalProps {
   onClose: () => void;
   onSaveEvent: (newEvent: Event) => void;
   eventData?: Event; // Support editing existing events
+  currentUser?: { fullName: string; email: string; role?: 'superadmin' | 'admin' | 'biasa'; assignedOrganizer?: string } | null;
 }
 
 const CATEGORY_BANNER_PRESETS: Record<Category, string> = {
@@ -28,7 +29,8 @@ const SEATING_PRESETS = [
 export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   onClose,
   onSaveEvent,
-  eventData
+  eventData,
+  currentUser
 }) => {
   // Confirmation and local draft states
   const [showConfirmPublish, setShowConfirmPublish] = useState(false);
@@ -40,12 +42,13 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const [title, setTitle] = useState(eventData?.title || '');
   const [category, setCategory] = useState<Category>(eventData?.category || 'Game');
   const [location, setLocation] = useState(eventData?.location || '');
+  const [mapsUrl, setMapsUrl] = useState(eventData?.mapsUrl || '');
   const [rawDate, setRawDate] = useState(eventData?.dateISO || '');
   const [timeStr, setTimeStr] = useState(
     eventData?.dateFullString?.split(', ').pop()?.split(' ')[0] || '15:00'
   );
   const [description, setDescription] = useState(eventData?.description || '');
-  const [organizer, setOrganizer] = useState(eventData?.organizer || '');
+  const [organizer, setOrganizer] = useState(eventData?.organizer || (currentUser?.role === 'admin' ? currentUser?.assignedOrganizer : '') || '');
   const [customBannerUrl, setCustomBannerUrl] = useState(eventData?.imageUrl || '');
   const [tag, setTag] = useState(eventData?.tag || '');
   
@@ -74,6 +77,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
         if (draft.title !== undefined) setTitle(draft.title);
         if (draft.category !== undefined) setCategory(draft.category);
         if (draft.location !== undefined) setLocation(draft.location);
+        if (draft.mapsUrl !== undefined) setMapsUrl(draft.mapsUrl);
         if (draft.rawDate !== undefined) setRawDate(draft.rawDate);
         if (draft.timeStr !== undefined) setTimeStr(draft.timeStr);
         if (draft.description !== undefined) setDescription(draft.description);
@@ -109,7 +113,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const handleAddTier = () => {
     if (!newTierName.trim()) return;
     const newTier: TicketTier = {
-      id: `tier-dy-${Date.now()}`,
+      id: `tier-dy-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       name: newTierName.trim(),
       price: Number(newTierPrice) || 0,
       description: newTierDesc.trim() || 'Fasilitas kelas standar.',
@@ -136,7 +140,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const handleAddRole = () => {
     if (!newRoleName.trim()) return;
     const newRole: RegistrationRoleConfig = {
-      id: `role-dy-${Date.now()}`,
+      id: `role-dy-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       name: newRoleName.trim(),
       isTeamType: newRoleIsTeam,
       maxQuantity: newRoleIsTeam ? 1 : Number(newRoleMaxQty) || 5,
@@ -187,6 +191,30 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
     );
   };
 
+  const handleMoveField = (secId: string, fieldIdx: number, direction: 'up' | 'down') => {
+    setActiveRoleSections(prev =>
+      prev.map(sec => {
+        if (sec.id === secId) {
+          const newFields = [...sec.fields];
+          if (direction === 'up' && fieldIdx > 0) {
+            const temp = newFields[fieldIdx];
+            newFields[fieldIdx] = newFields[fieldIdx - 1];
+            newFields[fieldIdx - 1] = temp;
+          } else if (direction === 'down' && fieldIdx < newFields.length - 1) {
+            const temp = newFields[fieldIdx];
+            newFields[fieldIdx] = newFields[fieldIdx + 1];
+            newFields[fieldIdx + 1] = temp;
+          }
+          return {
+            ...sec,
+            fields: newFields
+          };
+        }
+        return sec;
+      })
+    );
+  };
+
   const [newSectionTitle, setNewSectionTitle] = useState('');
 
   // Fields to append to a section
@@ -199,7 +227,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const handleAddSection = () => {
     if (!newSectionTitle.trim()) return;
     const newSec: FormSection = {
-      id: `sec-dy-${Date.now()}`,
+      id: `sec-dy-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       title: newSectionTitle.trim(),
       fields: []
     };
@@ -225,7 +253,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
     if (!newFieldLabel.trim()) return;
 
     const newField: CustomFieldDefinition = {
-      id: `f-dy-${Date.now()}`,
+      id: `f-dy-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       label: newFieldLabel.trim(),
       type: newFieldType,
       required: newFieldRequired,
@@ -272,7 +300,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const handleAddContentBlock = () => {
     if (!newBlockVal.trim()) return;
     const newBlock: ContentBlock = {
-      id: `block-dy-${Date.now()}`,
+      id: `block-dy-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       type: newBlockType,
       title: newBlockTitle.trim() || undefined,
       value: newBlockVal.trim()
@@ -304,13 +332,13 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
     const timer = setTimeout(() => {
       if (title || location || description || organizer || tiers.length > 0 || roles.length > 0) {
         const draft = {
-          title, category, location, rawDate, timeStr, description, organizer, customBannerUrl, tag, regOpenDate, regOpenTime, tiers, roles, contentBlocks, selectedSeatingPlan, customSeatingUrl
+          title, category, location, mapsUrl, rawDate, timeStr, description, organizer, customBannerUrl, tag, regOpenDate, regOpenTime, tiers, roles, contentBlocks, selectedSeatingPlan, customSeatingUrl
         };
         localStorage.setItem('sagatix_create_event_draft', JSON.stringify(draft));
       }
     }, 1000); // 1 second debounce
     return () => clearTimeout(timer);
-  }, [title, category, location, rawDate, timeStr, description, organizer, customBannerUrl, tag, regOpenDate, regOpenTime, tiers, roles, contentBlocks, selectedSeatingPlan, customSeatingUrl, eventData]);
+  }, [title, category, location, mapsUrl, rawDate, timeStr, description, organizer, customBannerUrl, tag, regOpenDate, regOpenTime, tiers, roles, contentBlocks, selectedSeatingPlan, customSeatingUrl, eventData]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -368,7 +396,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       : undefined;
 
     const newEvent: Event = {
-      id: eventData?.id || `evt-custom-${Date.now()}`,
+      id: eventData?.id || `evt-custom-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       title,
       category,
       dateMonth,
@@ -376,6 +404,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       dateFullString,
       dateISO: rawDate,
       location,
+      mapsUrl: mapsUrl || undefined,
       priceMin,
       priceMax,
       imageUrl: customBannerUrl || CATEGORY_BANNER_PRESETS[category],
@@ -445,9 +474,10 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
         </div>
 
         {/* Isi Formulir */}
-        <form onSubmit={handleSubmit} className="p-6 overflow-y-auto no-scrollbar space-y-7 text-xs">
-          
-          {hasDraft && (
+        <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
+          <div className="p-6 overflow-y-auto no-scrollbar space-y-7 text-xs flex-1">
+
+            {hasDraft && (
             <div className="bg-primary/10 border border-primary/20 rounded-xl p-3.5 flex items-center justify-between text-xs mb-4">
               <div className="space-y-0.5 text-left">
                 <span className="font-extrabold text-primary block">Draf Pembuatan Acara Ditemukan!</span>
@@ -548,19 +578,32 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
               </div>
             </div>
 
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-on-surface-variant block uppercase tracking-wider">Lokasi Fisik / Venue Stadium *</label>
-              <input
-                type="text"
-                required
-                placeholder="Contoh: Istora Senayan, Jakarta / ICE BSD"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                className="w-full bg-surface-container outline-hidden rounded-xl border border-outline px-4 py-2.5 text-xs focus:ring-1 focus:ring-primary text-on-surface font-semibold"
-              />
-              {validationErrors.location && (
-                <p className="text-red-500 text-[10px] font-bold mt-1 text-left">{validationErrors.location}</p>
-              )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-on-surface-variant block uppercase tracking-wider">Lokasi Fisik / Venue Stadium *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Contoh: Istora Senayan, Jakarta / ICE BSD"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  className="w-full bg-surface-container outline-hidden rounded-xl border border-outline px-4 py-2.5 text-xs focus:ring-1 focus:ring-primary text-on-surface font-semibold"
+                />
+                {validationErrors.location && (
+                  <p className="text-red-500 text-[10px] font-bold mt-1 text-left">{validationErrors.location}</p>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-on-surface-variant block uppercase tracking-wider">Tautan Google Maps Kustom (Opsional)</label>
+                <input
+                  type="url"
+                  placeholder="https://maps.google.com/..."
+                  value={mapsUrl}
+                  onChange={(e) => setMapsUrl(e.target.value)}
+                  className="w-full bg-surface-container outline-hidden rounded-xl border border-outline px-4 py-2.5 text-xs focus:ring-1 focus:ring-primary text-on-surface font-medium"
+                />
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -571,7 +614,8 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                   placeholder="Contoh: SAGATIX Championship"
                   value={organizer}
                   onChange={(e) => setOrganizer(e.target.value)}
-                  className="w-full bg-surface-container outline-hidden rounded-xl border border-outline px-4 py-2.5 text-xs text-on-surface font-medium"
+                  disabled={currentUser?.role === 'admin'}
+                  className={`w-full bg-surface-container outline-hidden rounded-xl border border-outline px-4 py-2.5 text-xs text-on-surface font-medium ${currentUser?.role === 'admin' ? 'opacity-70 cursor-not-allowed' : ''}`}
                 />
               </div>
 
@@ -670,10 +714,12 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                         <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
                           {tiers.map(t => {
                             const isAllowed = !r.allowedTierIds || r.allowedTierIds.length === 0 || r.allowedTierIds.includes(t.id);
+                            const checkboxId = `role-${r.id}-tier-${t.id}`;
                             return (
-                              <label key={t.id} className="flex items-center gap-1 cursor-pointer text-[10px] text-on-surface font-bold select-none">
+                              <label key={t.id} htmlFor={checkboxId} className="flex items-center gap-1 cursor-pointer text-[10px] text-on-surface font-bold select-none">
                                 <input
                                   type="checkbox"
+                                  id={checkboxId}
                                   checked={isAllowed}
                                   onChange={(e) => {
                                     const currentAllowed = r.allowedTierIds || tiers.map(x => x.id);
@@ -806,8 +852,19 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                   <div>
                     <span className="font-extrabold text-on-surface text-xs block">{tier.name}</span>
                     <span className="text-[10px] text-on-surface-variant block">{tier.description}</span>
-                    <span className="text-[10px] text-primary font-black mt-1 block">
-                      Harga: Rp {tier.price.toLocaleString('id-ID')} | Kuota: {tier.slotsAvailable} Pendaftar
+                    <span className="text-[10px] text-primary font-black mt-1 flex items-center gap-2">
+                      <span>Harga: Rp {tier.price.toLocaleString('id-ID')} | Kuota:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        value={tier.slotsAvailable}
+                        onChange={(e) => {
+                          const newSlots = Math.max(1, parseInt(e.target.value) || 1);
+                          setTiers(tiers.map(t => t.id === tier.id ? { ...t, slotsAvailable: newSlots } : t));
+                        }}
+                        className="w-16 bg-surface border border-outline rounded px-1.5 py-0.5 outline-hidden text-center font-black"
+                      />
+                      <span>Pendaftar</span>
                     </span>
                   </div>
                   <button
@@ -943,18 +1000,38 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                           Belum ada pertanyaan isian di section ini. Gunakan form tambah field di bawah.
                         </div>
                       ) : (
-                        sec.fields.map(f => (
+                        sec.fields.map((f, fIdx) => (
                           <div key={f.id} className="flex justify-between bg-surface-container px-2.5 py-1 text-[10px] rounded border border-outline-variant/30 font-medium">
                             <span>
                               📝 {f.label} ({f.type}) {f.required && <span className="text-red-500 font-black">*</span>}
                             </span>
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveFieldFromSection(sec.id, f.id)}
-                              className="text-on-surface-variant hover:text-red-500"
-                            >
-                              x
-                            </button>
+                            <div className="flex gap-2 items-center">
+                              <button
+                                type="button"
+                                disabled={fIdx === 0}
+                                onClick={() => handleMoveField(sec.id, fIdx, 'up')}
+                                className="text-on-surface-variant hover:text-primary disabled:opacity-30 disabled:cursor-not-allowed text-[10px]"
+                                title="Geser ke atas"
+                              >
+                                ▲
+                              </button>
+                              <button
+                                type="button"
+                                disabled={fIdx === sec.fields.length - 1}
+                                onClick={() => handleMoveField(sec.id, fIdx, 'down')}
+                                className="text-on-surface-variant hover:text-primary disabled:opacity-30 disabled:cursor-not-allowed text-[10px]"
+                                title="Geser ke bawah"
+                              >
+                                ▼
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveFieldFromSection(sec.id, f.id)}
+                                className="text-on-surface-variant hover:text-red-500 font-bold ml-1"
+                              >
+                                x
+                              </button>
+                            </div>
                           </div>
                         ))
                       )}
@@ -1226,8 +1303,10 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
             />
           </div>
 
+          </div>
+
           {/* FOOTER ACTION BUTTONS */}
-          <div className="pt-4 flex justify-end gap-3 sticky bottom-0 bg-surface py-3 border-t border-outline-variant shrink-0">
+          <div className="px-6 py-4 flex justify-end gap-3 bg-surface border-t border-outline-variant shrink-0">
             <button
               type="button"
               onClick={onClose}
@@ -1243,7 +1322,6 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
               <span>Publikasikan Acara</span>
             </button>
           </div>
-
         </form>
       </motion.div>
 
